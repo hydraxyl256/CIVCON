@@ -64,7 +64,7 @@ class User(Base):
     hashed_password = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     role = Column(Enum(Role), default=Role.CITIZEN)
-
+    preferred_language = Column(String, default="EN")
     # Location & demographics
     region = Column(String, nullable=True)
     district_id = Column(String, nullable=True)
@@ -174,6 +174,8 @@ class Message(Base):
     content = Column(Text, nullable=False)
     district_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    response = Column(String, nullable=True)  # MP reply
+    responded_at = Column(DateTime, nullable=True)
 
     # Relationships
     sender = relationship("User", foreign_keys=[sender_id], back_populates="messages_sent")

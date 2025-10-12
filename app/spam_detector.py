@@ -1,8 +1,8 @@
-# AI-based spam detection using scikit-learn (TF-IDF + Logistic Regression)
-
+# spam_detector.py
 import pickle
 import re
 import os
+from typing import Tuple
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -10,13 +10,25 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
+# NLTK setup
 nltk.download('stopwords', quiet=True)
 nltk.download('punkt', quiet=True)
+
+# Example offensive words list (extendable per language)
+OFFENSIVE_WORDS = {
+    "en": ["damn", "shit", "fuck", "bitch"],
+    "lg": ["kibadde", "buwereza"],
+    "rk": ["bubi", "okubina"],  # Runyankole
+    "ach": ["manya", "lonyo"],   # Luo/Acholi
+    "sw": ["vitu vibaya", "kamwaga"],  # Swahili
+    "rt": ["bubi", "buru"]       # Rutoro
+}
+
 
 class SpamDetector:
     def __init__(self):
         self.model_path = "spam_model.pkl"
-        self.pipeline = None
+        self.pipeline: Pipeline = None
         self.is_loaded = False
         self._load_model()
 
@@ -27,40 +39,36 @@ class SpamDetector:
                 with open(self.model_path, 'rb') as f:
                     self.pipeline = pickle.load(f)
                 self.is_loaded = True
-                print("Spam detection model loaded successfully.")
+                print("✅ Spam detection model loaded successfully.")
             except Exception as e:
-                print(f"Failed to load model: {e}. Training a new model.")
+                print(f"⚠️ Failed to load model: {e}. Training a new model.")
                 self._train_model()
         else:
-            print("Model not found. Training a new model.")
+            print("⚠️ Model not found. Training a new model.")
             self._train_model()
 
     def _train_model(self):
-        """Train the model safely, skipping malformed rows."""
+        """Train a simple spam detection model with sample data."""
         sms_data = [
-            ("Free entry in 2 a wkly comp to win FA Cup final tkts 21st May 2005. Text FA to 87121 ...", "spam"),
+            ("Free entry in 2 a wkly comp to win FA Cup final tkts...", "spam"),
             ("K..give me a sec... I'll call u right now..", "ham"),
             ("Ok i will come soon", "ham"),
-            ("URGENT! We are trying to contact U. Today draw shows that you have won a £1000 prize ...", "spam"),
-            ("Congrats! 1 year special cinema ticket for 2 is yours. Claim call 09061209465 now! C Apply", "spam"),
+            ("URGENT! You won a £1000 prize ...", "spam"),
+            ("Congrats! 1 year special cinema ticket for 2 is yours.", "spam"),
             ("Hello my love, what are you doing? I miss you.", "ham"),
-            ("Your free ringtone is waiting. Free polys! Call 08702344776 now!", "spam"),
+            ("Your free ringtone is waiting. Call 08702344776 now!", "spam"),
             ("I love you too! Can't wait to see you.", "ham")
         ]
 
-        X = []
-        y = []
-
+        X, y = [], []
         for row in sms_data:
             if isinstance(row, (tuple, list)) and len(row) == 2:
                 msg, label = row
                 X.append(msg)
                 y.append(1 if label.lower() == 'spam' else 0)
-            else:
-                print(f"Skipping malformed row in SMS dataset: {row}")
 
         if not X or not y:
-            print("Warning: No valid training data found. Model will not be trained.")
+            print("⚠️ No valid training data found. Model will not be trained.")
             self.pipeline = None
             self.is_loaded = False
             return
@@ -75,12 +83,12 @@ class SpamDetector:
             with open(self.model_path, 'wb') as f:
                 pickle.dump(self.pipeline, f)
             self.is_loaded = True
-            print("Spam detection model trained and saved successfully.")
+            print("✅ Spam detection model trained and saved successfully.")
         except Exception as e:
-            print(f"Failed to save model: {e}")
+            print(f"⚠️ Failed to save model: {e}")
 
     def preprocess_text(self, text: str) -> str:
-        """Preprocess text for prediction."""
+        """Preprocess text for spam/offensive detection."""
         text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
         text = re.sub(r'\s+', ' ', text)
         text = re.sub(r'[^\w\s]', '', text)
@@ -89,10 +97,10 @@ class SpamDetector:
         tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
         return ' '.join(tokens)
 
-    def predict_spam(self, text: str):
-        """Predict if text is spam. Returns (is_spam: bool, probability: float)."""
+    def predict_spam(self, text: str) -> Tuple[bool, float]:
+        """Predict if text is spam. Returns (is_spam, probability)."""
         if not self.is_loaded or not self.pipeline:
-            print("Warning: Model not loaded. Returning default 'not spam'.")
+            print("⚠️ Model not loaded. Returning default 'not spam'.")
             return False, 0.0
 
         processed_text = self.preprocess_text(text)
@@ -101,8 +109,27 @@ class SpamDetector:
             probability = self.pipeline.predict_proba([processed_text])[0][1]
             return prediction == 1, probability
         except Exception as e:
-            print(f"Prediction failed: {e}")
+            print(f"⚠️ Prediction failed: {e}")
             return False, 0.0
 
-# Instantiate a global detector
+    def check_offensive(self, text: str, language: str = "en") -> bool:
+        """Check if text contains offensive words for the given language."""
+        text_lower = text.lower()
+        offensive_list = OFFENSIVE_WORDS.get(language, OFFENSIVE_WORDS["en"])
+        return any(word in text_lower for word in offensive_list)
+
+
+# Global detector instance
 detector = SpamDetector()
+
+if __name__ == "__main__":
+    # Quick test
+    examples = [
+        "You are a damn fool!",
+        "Hello, how are you?",
+        "Free tickets!!!"
+    ]
+    for msg in examples:
+        spam, prob = detector.predict_spam(msg)
+        offensive = detector.check_offensive(msg, "en")
+        print(f"Message: {msg}\nSpam: {spam}, Probability: {prob:.2f}, Offensive: {offensive}\n")
