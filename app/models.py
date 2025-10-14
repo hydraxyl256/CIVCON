@@ -60,7 +60,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
-    email = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
     hashed_password = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     role = Column(Enum(Role), default=Role.CITIZEN)
@@ -72,6 +72,7 @@ class User(Base):
     sub_county_id = Column(String, nullable=True)
     parish_id = Column(String, nullable=True)
     village_id = Column(String, nullable=True)
+    phone_number = Column(String, unique=True, index=True, nullable=True)
 
     # Profile
     occupation = Column(String, nullable=True)
@@ -165,6 +166,19 @@ class Vote(Base):
     post = relationship("Post", back_populates="votes")
 
 
+class MP(Base):
+    __tablename__ = "mps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone_number = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    district_id = Column(String, nullable=True)  
+
+    # relationship to messages sent to this MP
+    messages = relationship("Message", back_populates="mp")
+
+
 class Message(Base):
     __tablename__ = "messages"
 
@@ -176,6 +190,8 @@ class Message(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     response = Column(String, nullable=True)  # MP reply
     responded_at = Column(DateTime, nullable=True)
+    mp_id = Column(Integer, ForeignKey("mps.id"), nullable=False)
+    mp = relationship("MP", back_populates="messages")
 
     # Relationships
     sender = relationship("User", foreign_keys=[sender_id], back_populates="messages_sent")
@@ -249,3 +265,5 @@ class UssdSession(Base):
     language = Column(String, default='EN')
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+

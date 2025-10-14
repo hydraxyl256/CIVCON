@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from .database import engine, get_db, Base
 from . import models
-from .routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin
+from .routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 # Logging
@@ -39,6 +39,7 @@ app.include_router(notifications.router)
 app.include_router(messages.router)
 app.include_router(admin.router)
 app.include_router(ussd_router)
+app.include_router(mp.router)
 
 
 # Database initialization

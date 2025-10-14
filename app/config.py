@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
 
 class Settings(BaseSettings):
     database_hostname: str
@@ -15,6 +16,8 @@ class Settings(BaseSettings):
     linkedin_client_secret: str
     AFRICASTALKING_USERNAME: str 
     AFRICASTALKING_API_KEY: str
+    DEFAULT_CIVIC_OFFICE_NUMBER: str = os.getenv("DEFAULT_CIVIC_OFFICE_NUMBER")
+
 
     model_config = SettingsConfigDict(
         env_file=".env",

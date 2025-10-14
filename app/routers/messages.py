@@ -67,7 +67,7 @@ async def send_message(
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient MP not found")
 
-    if current_user.district_id and recipient.district_id and current_user.district_id != recipient.district_id:
+    if current_user.district_id and recipient.district_id != recipient.district_id:
         raise HTTPException(status_code=403, detail="Can only message MPs in your district")
 
     db_message = Message(
