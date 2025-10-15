@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     AFRICASTALKING_USERNAME: str 
     AFRICASTALKING_API_KEY: str
     DEFAULT_CIVIC_OFFICE_NUMBER: str = os.getenv("DEFAULT_CIVIC_OFFICE_NUMBER")
+    mail_username: str
+    mail_password: str
+    mail_from: str
+    mail_port: int = 587
+    mail_server: str
+    mail_tls: bool = True
+    mail_ssl: bool = False
+    redis_url: str
+    frontend_url: str
+    cloudinary_cloud_name: str
+    cloudinary_api_key: str
+    cloudinary_api_secret: str
 
 
     model_config = SettingsConfigDict(
