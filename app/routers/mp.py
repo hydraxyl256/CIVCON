@@ -6,49 +6,74 @@ import asyncio
 import re
 import logging
 import africastalking
+from sqlalchemy import or_
 
 from app.database import get_db
-from app.models import Message, User, Role
+from app.models import Message, User, MP, Role
 from app.config import settings
-from .oauth2 import get_current_user
+from app.routers.oauth2 import get_current_user  # adjust import if needed
+from app.utils.phone_utils import normalize_phone_number
 
 router = APIRouter(prefix="/mp", tags=["MP"])
 logger = logging.getLogger(__name__)
 
-# Africa’s Talking SMS setup
+# Initialize Africa’s Talking
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
 
-# Async SMS helper
+
+# Helper: Async SMS sender
 async def send_sms_async(phone: str, message: str):
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: sms.send(message=message, recipients=[phone]))
-        logger.info(f"SMS sent to {phone}")
+        logger.info(f" SMS sent to {phone}")
     except Exception as e:
-        logger.error(f"Failed to send SMS: {e}")
+        logger.error(f" Failed to send SMS: {e}")
 
 
 
-# 1. MP Inbox — threaded conversation view
+# MP Inbox - All Conversations
 @router.get("/inbox")
 async def get_inbox(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    page: int = 1,
+    limit: int = 20,
+    search: str = None
 ):
     if current_user.role != Role.MP:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied. MPs only.")
 
-    # Fetch all messages for this MP
-    result = await db.execute(
-        select(Message)
-        .where(Message.recipient_id == current_user.id)
-        .order_by(Message.created_at.asc())
-    )
+    # Get MP record
+    result_mp = await db.execute(select(MP).where(MP.user_id == current_user.id))
+    mp = result_mp.scalars().first()
+    if not mp:
+        raise HTTPException(status_code=404, detail="MP profile not found.")
+
+    # Build query
+    query = select(Message).where(Message.recipient_id == current_user.id)
+
+    if search:
+        query = query.join(User, Message.sender_id == User.id).where(
+            or_(
+                Message.content.ilike(f"%{search}%"),
+                User.first_name.ilike(f"%{search}%"),
+                User.last_name.ilike(f"%{search}%")
+            )
+        )
+
+    # Order by creation time
+    query = query.order_by(Message.created_at.asc())
+
+    # Pagination
+    offset = (page - 1) * limit
+    query = query.offset(offset).limit(limit)
+    result = await db.execute(query)
     messages = result.scalars().all()
 
-    # Group messages by conversation (by sender)
+    # Group by sender
     conversations = {}
     for msg in messages:
         sender_id = msg.sender_id
@@ -56,24 +81,26 @@ async def get_inbox(
             conversations[sender_id] = []
         conversations[sender_id].append({
             "id": msg.id,
-            "from": "You" if msg.sender_id == current_user.id else msg.sender.first_name if msg.sender else "Unknown",
+            "from": msg.sender.first_name if msg.sender else "Unknown",
             "content": msg.content,
             "district": msg.district_id,
             "created_at": msg.created_at,
             "response": msg.response,
             "responded_at": msg.responded_at,
-            "mp_id": msg.mp_id
         })
 
     return {
         "mp": f"{current_user.first_name} {current_user.last_name}",
+        "district": mp.district_id,
+        "page": page,
+        "limit": limit,
         "conversations_count": len(conversations),
         "conversations": conversations
     }
 
 
 
-# 2. MP Reply — reply in threaded conversation
+# MP Reply - Respond to Citizen
 @router.post("/reply")
 async def mp_reply(
     message_id: int,
@@ -84,7 +111,13 @@ async def mp_reply(
     if current_user.role != Role.MP:
         raise HTTPException(status_code=403, detail="Only MPs can reply.")
 
-    # Fetch original message
+    # Confirm MP record exists
+    result_mp = await db.execute(select(MP).where(MP.user_id == current_user.id))
+    mp = result_mp.scalars().first()
+    if not mp:
+        raise HTTPException(status_code=404, detail="MP record not found for this user.")
+
+    # Fetch the original citizen message
     result = await db.execute(select(Message).where(Message.id == message_id))
     orig_msg = result.scalars().first()
     if not orig_msg:
@@ -94,38 +127,38 @@ async def mp_reply(
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found.")
 
-    # Save MP reply as a new message in the thread
+    # Save MP reply as a new message in thread
     reply_msg = Message(
         sender_id=current_user.id,
         recipient_id=citizen.id,
         content=reply,
-        district_id=citizen.district_id,
+        district_id=mp.district_id,
         created_at=datetime.utcnow(),
-        mp_id=current_user.id,
-        # link to original message for tracking if needed
+        mp_id=mp.id,
     )
     db.add(reply_msg)
 
-    # Mark original message as responded (for tracking)
+    # Mark original message as responded
     orig_msg.response = reply
     orig_msg.responded_at = datetime.utcnow()
     db.add(orig_msg)
-
     await db.commit()
 
     # Send SMS to citizen
-    citizen_phone = citizen.phone_number
+    citizen_phone = normalize_phone_number(citizen.phone_number)
     if citizen_phone:
-        citizen_phone = re.sub(r"[^+\d]", "", citizen_phone)  # normalize
-        await send_sms_async(citizen_phone, f"Reply from MP {current_user.first_name}: {reply}")
+        await send_sms_async(
+            citizen_phone,
+            f"Reply from MP {current_user.first_name} ({mp.district_id}): {reply}"
+        )
     else:
-        logger.warning(f"Citizen {citizen.id} has no phone number on record.")
+        logger.warning(f"Citizen {citizen.id} has no valid phone number.")
 
-    return {"status": "success", "message": "Reply sent and citizen notified."}
+    return {"status": "success", "message": "Reply sent successfully and citizen notified."}
 
 
 
-# 3. View full conversation with a citizen
+# MP Conversation View - Full Chat
 @router.get("/conversation/{citizen_id}")
 async def view_conversation(
     citizen_id: int,
@@ -135,7 +168,7 @@ async def view_conversation(
     if current_user.role != Role.MP:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied. MPs only.")
 
-    # Fetch messages between MP and this citizen
+    # Get conversation between MP and citizen
     result = await db.execute(
         select(Message)
         .where(
@@ -149,7 +182,6 @@ async def view_conversation(
     if not messages:
         return {"conversation": [], "message": "No messages found with this citizen."}
 
-    # Format messages for display
     conversation = [
         {
             "id": msg.id,

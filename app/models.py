@@ -16,6 +16,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy_searchable import TSVectorType
 from app.database import Base
 import enum
+from datetime import datetime
 
 
 
@@ -97,6 +98,7 @@ class User(Base):
     messages_received = relationship("Message", foreign_keys="Message.recipient_id", back_populates="recipient")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     groups = relationship("Group", secondary=group_members, back_populates="members")
+    mp = relationship("MP", back_populates="user", uselist=False)
 
 
 class Post(Base):
@@ -173,7 +175,11 @@ class MP(Base):
     name = Column(String, nullable=False)
     phone_number = Column(String, nullable=True)
     email = Column(String, nullable=True)
-    district_id = Column(String, nullable=True)  
+    district_id = Column(String, nullable=True) 
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=True)
+    user = relationship("User", back_populates="mp") 
 
     # relationship to messages sent to this MP
     messages = relationship("Message", back_populates="mp")

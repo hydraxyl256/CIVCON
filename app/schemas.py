@@ -290,3 +290,48 @@ class USSDRequest(BaseModel):
 
 class USSDResponse(BaseModel):
     response: str
+
+
+class UserUpdate(BaseModel):
+    first_name: str | None
+    last_name: str | None
+    email: EmailStr | None
+    region: str | None
+    district_id: str | None
+    county_id: str | None
+    sub_county_id: str | None
+    parish_id: str | None
+    village_id: str | None
+    occupation: str | None
+    bio: str | None
+    political_interest: str | None
+    community_role: str | None
+    interests: list[str] | None
+    notifications: dict | None
+    privacy_level: str | None
+
+
+class UserResponse(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    email: str
+    role: str
+    region: str | None
+    district_id: str | None
+    county_id: str | None
+    sub_county_id: str | None
+    parish_id: str | None
+    village_id: str | None
+    occupation: str | None
+    bio: str | None
+    profile_image: str | None
+    political_interest: str | None
+    community_role: str | None
+    interests: list | None
+    notifications: dict | None
+    privacy_level: str | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

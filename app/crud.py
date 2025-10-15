@@ -70,8 +70,8 @@ async def create_user(db: AsyncSession, user: UserCreate, profile_image_path: st
 
 # ---------------- GET USERS ----------------
 
-async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    result = await db.execute(select(User).filter_by(email=email))
+async def get_user_by_email(db: AsyncSession, email: str):
+    result = await db.execute(select(User).where(User.email == email))
     return result.scalars().first()
 
 
@@ -87,17 +87,17 @@ async def get_user_by_linkedin_id(db: AsyncSession, linkedin_id: str) -> Optiona
 
 
 
-def get_mps_by_district(db: AsyncSession, district_id: str) -> list[User]:
+async def get_mps_by_district(db: AsyncSession, district_id: str) -> list[User]:
     return db.query(User).filter(User.role == Role.MP, User.district_id == district_id).all()
 
-def get_ussd_session(db: AsyncSession, phone_number: str, session_id: str) -> Optional[dict]:
+async def get_ussd_session(db: AsyncSession, phone_number: str, session_id: str) -> Optional[dict]:
     # Implement session query from ussd_sessions table
     session = db.query(UssdSession).filter(UssdSession.phone_number == phone_number, UssdSession.session_id == session_id).first()
     if session:
         return {"step": session.current_step, "data": session.user_data}
     return None
 
-def save_ussd_session(db: AsyncSession, phone_number: str, session_id: str, step: str, data: dict):
+async def save_ussd_session(db: AsyncSession, phone_number: str, session_id: str, step: str, data: dict):
     session = db.query(UssdSession).filter(UssdSession.phone_number == phone_number, UssdSession.session_id == session_id).first()
     if session:
         session.current_step = step
