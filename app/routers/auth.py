@@ -1,10 +1,9 @@
-# app/routers/auth.py
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body, Request
+from fastapi.responses import RedirectResponse
 import os
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from pydantic import EmailStr
 from jose import jwt, JWTError
@@ -19,9 +18,11 @@ from app.schemas import UserCreate, User, Token, UserOut
 from app.crud import create_user, get_user_by_email, verify_password  
 from app.config import settings  
 from app.schemas import ResetPasswordSchema
+from authlib.integrations.starlette_client import OAuth
+from sqlalchemy.future import select
 
 
-
+oauth = OAuth()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -44,6 +45,27 @@ cloudinary.config(
     api_key=settings.cloudinary_api_key,
     api_secret=settings.cloudinary_api_secret,
     secure=True,
+)
+
+# Register Google
+oauth.register(
+    name="google",
+    client_id=settings.google_client_id,
+    client_secret=settings.google_client_secret,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+# Register LinkedIn
+oauth.register(
+    name="linkedin",
+    client_id=settings.linkedin_client_id,
+    client_secret=settings.linkedin_client_secret,
+    access_token_url="https://www.linkedin.com/oauth/v2/accessToken",
+    access_token_params=None,
+    authorize_url="https://www.linkedin.com/oauth/v2/authorization",
+    api_base_url="https://api.linkedin.com/v2",
+    client_kwargs={"scope": "r_liteprofile r_emailaddress"},
 )
 
 #
@@ -262,16 +284,119 @@ async def logout(token: str = Depends(oauth2_scheme)):
     return {"message": "Logged out"}
 
 
-# Example protected endpoint
+#  protected endpoint
 @router.get("/me", response_model=UserOut)
 async def me(user: UserOut = Depends(get_current_user)):
     return user
 
-# SSO endpoints 
-@router.get("/google/login")
-async def google_login():
-    raise HTTPException(status_code=501, detail="SSO not configured in this simplified file")
 
+
+router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+#  GOOGLE 
+@router.get("/google/login")
+async def google_login(request: Request):
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI") or f"{settings.backend_url}/auth/google/callback"
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@router.get("/google/callback")
+async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    token = await oauth.google.authorize_access_token(request)
+    user_info = token.get("userinfo")
+
+    if not user_info:
+        raise HTTPException(status_code=400, detail="Google login failed")
+
+    email = user_info.get("email")
+    name = user_info.get("name", "")
+    picture = user_info.get("picture", "")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in Google response")
+
+    #  Async query
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    #  Create user if new
+    if not user:
+        user = User(
+            email=email,
+            fullname=name,
+            profile_image=picture,
+            is_active=True,
+            provider="google"
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    #  Generate JWT
+    access_token = create_access_token({"sub": str(user.id)})
+
+    #  Auto redirect to frontend homepage with token
+    redirect_url = f"{settings.frontend_url}/?token={access_token}"
+    return RedirectResponse(url=redirect_url)
+
+
+
+#  LINKEDIN 
 @router.get("/linkedin/login")
-async def linkedin_login():
-    raise HTTPException(status_code=501, detail="SSO not configured in this simplified file")
+async def linkedin_login(request: Request):
+    redirect_uri = os.getenv("LINKEDIN_REDIRECT_URI") or f"{settings.backend_url}/auth/linkedin/callback"
+    return await oauth.linkedin.authorize_redirect(request, redirect_uri)
+
+
+@router.get("/linkedin/callback")
+async def linkedin_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    token = await oauth.linkedin.authorize_access_token(request)
+    access_token = token.get("access_token")
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="LinkedIn authorization failed")
+
+    # Fetch user info
+    profile = await oauth.linkedin.get(
+        "me?projection=(id,localizedFirstName,localizedLastName,profilePicture(displayImage~:playableStreams))",
+        token=token
+    )
+    email_resp = await oauth.linkedin.get(
+        "emailAddress?q=members&projection=(elements*(handle~))",
+        token=token
+    )
+
+    data = profile.json()
+    email_data = email_resp.json()
+    email = email_data["elements"][0]["handle~"]["emailAddress"]
+    name = f"{data.get('localizedFirstName', '')} {data.get('localizedLastName', '')}"
+    picture = (
+        data.get("profilePicture", {})
+            .get("displayImage~", {})
+            .get("elements", [{}])[-1]
+            .get("identifiers", [{}])[0]
+            .get("identifier")
+    )
+
+    #  Async query
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(
+            email=email,
+            fullname=name,
+            profile_image=picture,
+            is_active=True,
+            provider="linkedin"
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    #  Generate JWT
+    jwt_token = create_access_token({"sub": str(user.id)})
+
+    #  Auto redirect to frontend homepage with token
+    redirect_url = f"{settings.frontend_url}/?token={jwt_token}"
+    return RedirectResponse(url=redirect_url)

@@ -7,9 +7,13 @@ import logging
 from datetime import datetime
 from .database import engine, get_db, Base
 from . import models
+from starlette.middleware.sessions import SessionMiddleware
+import os
 from .routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
+from .config import settings
+
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -17,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 # App and CORS
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=(settings.session_secret_key, "supersecret_session_key"),  
+)
 
 app.add_middleware(
     CORSMiddleware,
