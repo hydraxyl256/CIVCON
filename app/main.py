@@ -27,6 +27,13 @@ app = FastAPI(
 
 
 )
+
+origins = [
+    "https://civ-con-sh2j.vercel.app",  #  frontend on vercel
+    "http://localhost:5173",             #  for local dev if using Vite/React
+]
+
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=(settings.session_secret_key, "supersecret_session_key"),  
@@ -34,7 +41,7 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
