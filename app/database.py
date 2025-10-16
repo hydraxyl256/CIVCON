@@ -6,11 +6,11 @@ from .config import settings
 
 DATABASE_URL = settings.database_url
 
-# Create SSL context for Render PostgreSQL
-ssl_context = ssl.create_default_context(cafile=None)
+# Create SSL context that skips certificate verification (Render uses self-signed)
+ssl_context = ssl._create_unverified_context()
 connect_args = {"ssl": ssl_context}
 
-# Create async engine
+# Async engine
 engine = create_async_engine(DATABASE_URL, echo=True, connect_args=connect_args)
 
 # Async session factory
