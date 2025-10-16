@@ -22,9 +22,11 @@ from authlib.integrations.starlette_client import OAuth
 from sqlalchemy.future import select
 
 
-oauth = OAuth()
-router = APIRouter(prefix="/auth", tags=["auth"])
 
+router = APIRouter(prefix="/auth",
+                    tags=["auth"])
+
+oauth = OAuth()
 
 # Setup: secrets & services
 SECRET_KEY = settings.secret_key
@@ -290,8 +292,6 @@ async def me(user: UserOut = Depends(get_current_user)):
     return user
 
 
-
-router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 #  GOOGLE 
 @router.get("/google/login")

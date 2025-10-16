@@ -9,7 +9,7 @@ from .database import engine, get_db, Base
 from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from .routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds
+from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 from .config import settings
@@ -20,7 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 # App and CORS
-app = FastAPI()
+app = FastAPI(
+    title="CIVCON API",
+    description="CIVCON is a community-driven forum platform that enables Ugandan citizens to directly engage with their MPs on local issues, fostering transparency, accountability, and collaborative problem-solving. The platform allows citizens to raise concerns, form communities, and receive responses from representatives, while MPs can view constituency-specific complaints and take action. Journalists can contribute by going live to highlight community events.",
+    version="1.0.0"
+
+
+)
 app.add_middleware(
     SessionMiddleware,
     secret_key=(settings.session_secret_key, "supersecret_session_key"),  
