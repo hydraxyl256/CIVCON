@@ -1,15 +1,15 @@
 import asyncio
 import json
 import redis.asyncio as redis
+from .config import settings
 
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_DB = 0
-REDIS_EXPIRE = 3600  # 1 hour session expiry
-
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+# Use environment/config URL
+REDIS_URL = settings.redis_url
+r = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 
 # Existing helpers
+REDIS_EXPIRE = 3600  # 1 hour session expiry
+
 async def save_session(session_id: str, session_data: dict):
     await r.set(session_id, json.dumps(session_data), ex=REDIS_EXPIRE)
 

@@ -36,7 +36,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Redis for token blacklist (logout). Use env var for URL in production (e.g., Upstash or Render Redis)
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = settings.redis_url
 redis = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 
 # Cloudinary config from env (set these in Render/Railway)
