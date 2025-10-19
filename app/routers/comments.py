@@ -8,9 +8,18 @@ from typing import List, Optional
 from .. import models, schemas
 from app.routers import oauth2
 from ..database import get_db
+import cloudinary
+import cloudinary.uploader
+import os
+from app.config import settings
 
-UPLOAD_DIR = Path("Uploads/comments")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Configure Cloudinary
+cloudinary.config(
+    cloud_name=settings.cloudinary_cloud_name,
+    api_key=settings.cloudinary_api_key,
+    api_secret=settings.cloudinary_api_secret,
+)
+
 
 router = APIRouter(
     prefix="/comments",
@@ -32,23 +41,23 @@ async def create_comment(
     if not post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
-    # Handle file upload
+    # Handle file upload (Cloudinary)
     media_url = None
     if file:
         allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mov'}
         ext = Path(file.filename).suffix.lower()
         if ext not in allowed_extensions:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
-        content_bytes = await file.read()
-        if len(content_bytes) > 10 * 1024 * 1024:  # 10 MB limit
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File size exceeds 10MB")
-        filename = f"{uuid.uuid4()}{ext}"
-        path = UPLOAD_DIR / filename
-        with open(path, "wb") as f:
-            f.write(content_bytes)
-        media_url = f"/Uploads/comments/{filename}"
 
-    #Create comment
+        # Upload directly to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            file.file,
+            folder="civcon/comments",
+            resource_type="auto"  # handles image or video
+        )
+        media_url = upload_result["secure_url"]
+
+    # Create comment
     db_comment = models.Comment(
         content=content,
         post_id=post_id,
@@ -59,7 +68,7 @@ async def create_comment(
     await db.commit()
     await db.refresh(db_comment)
 
-    # Preload relationships before returning (important)
+    # Preload relationships before returning
     query = (
         select(models.Comment)
         .where(models.Comment.id == db_comment.id)
@@ -70,7 +79,7 @@ async def create_comment(
     )
     refreshed_comment = (await db.execute(query)).scalars().first()
 
-    #  Optional: create notification
+    # Optional: notification
     if post.author_id != current_user.id:
         notification = models.Notification(
             user_id=post.author_id,

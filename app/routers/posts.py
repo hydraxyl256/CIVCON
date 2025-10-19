@@ -10,13 +10,25 @@ import logging
 import os
 from .oauth2 import get_current_user
 from datetime import datetime
+import cloudinary
+import cloudinary.uploader
+from app.config import settings
+
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-# Create a post with optional media
+# Configure Cloudinary
+cloudinary.config(
+    cloud_name=settings.cloudinary_cloud_name,
+    api_key=settings.cloudinary_api_key,
+    api_secret=settings.cloudinary_api_secret,
+)
+
+
+
 @router.post("/", response_model=PostResponse)
 async def create_post(
     title: str = Form(...),
@@ -31,25 +43,24 @@ async def create_post(
     await db.commit()
     await db.refresh(post)
 
-   
-   # Handle media files
     media_list = []
     if media_files:
-        os.makedirs("media/posts", exist_ok=True)
         for file in media_files:
-            file_path = f"media/posts/{post.id}_{file.filename}"
-            with open(file_path, "wb") as f:
-                f.write(await file.read())
+            # Upload directly to Cloudinary
+            upload_result = cloudinary.uploader.upload(
+                file.file,
+                folder="civcon/posts",
+                resource_type="auto"  # supports image/video
+            )
             
             media = PostMedia(
                 post_id=post.id,
-                media_url=file_path,
-                media_type=file.content_type  # e.g., 'image/png' or 'video/mp4'
+                media_url=upload_result["secure_url"],  # Cloudinary hosted URL
+                media_type=file.content_type
             )
             db.add(media)
             media_list.append(media)
         await db.commit()
-
 
     await db.refresh(post)
     return PostResponse(
@@ -63,6 +74,7 @@ async def create_post(
         updated_at=post.updated_at,
         like_count=0
     )
+
 
 
 # List posts with like count
@@ -117,7 +129,7 @@ async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
 async def create_comment(
     post_id: int,
     comment: CommentCreate,
-    current_user: User = Depends(lambda: None),  # Replace with real auth dependency
+    current_user: User = Depends(lambda: None),  
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(Post).where(Post.id == post_id)
