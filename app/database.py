@@ -6,7 +6,7 @@ from .config import settings
 
 DATABASE_URL = settings.database_url
 
-# Create SSL context that skips certificate verification (Render uses self-signed)
+# Create SSL context that skips certificate verification 
 ssl_context = ssl._create_unverified_context()
 connect_args = {"ssl": ssl_context}
 

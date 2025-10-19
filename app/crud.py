@@ -9,7 +9,7 @@ from passlib.hash import bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-# ---------------- PASSWORD HELPERS ----------------
+#  PASSWORD HELPERS 
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
@@ -19,7 +19,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# ---------------- ROLE DERIVATION ----------------
+#  ROLE DERIVATION 
 
 def derive_role(community_role: Optional[str]) -> Role:
     if community_role:
@@ -68,7 +68,7 @@ async def create_user(db: AsyncSession, user: UserCreate, profile_image_path: st
     await db.refresh(db_user)
     return db_user
 
-# ---------------- GET USERS ----------------
+# GET USERS 
 
 async def get_user_by_email(db: AsyncSession, email: str):
     result = await db.execute(select(User).where(User.email == email))

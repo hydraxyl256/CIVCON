@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     cloudinary_api_key: str
     cloudinary_api_secret: str
     session_secret_key: str
-    frontend_url: str = "http://localhost:3000"  
-    backend_url: str = "http://localhost:8000"
+    frontend_url: str = "https://civ-con-sh2j.vercel.app/"  
+    backend_url: str = "https://civcon.onrender.com/"
 
     
 
