@@ -210,6 +210,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
 
 
 # Uganda location endpoints
+# Districts
+@router.get("/locations/districts", response_model=List[Location], summary="Get all districts")
+async def get_districts():
+    districts = uga_locale.get_districts()
+    return districts
+
+# Counties in a district
 @router.get("/locations/counties/{district_id}", response_model=List[Location], summary="Get counties in a district")
 async def get_counties(district_id: str):
     district = uga_locale.find_district_by_id(district_id)
@@ -218,7 +225,7 @@ async def get_counties(district_id: str):
     counties = uga_locale.get_counties(district_id)
     return counties
 
-
+# Sub-counties in a county
 @router.get("/locations/sub-counties/{county_id}", response_model=List[Location], summary="Get sub-counties in a county")
 async def get_sub_counties(county_id: str):
     county = uga_locale.find_county_by_id(county_id)
@@ -229,7 +236,7 @@ async def get_sub_counties(county_id: str):
         raise HTTPException(status_code=404, detail=f"No sub-counties found for county '{county['name']}' (id: {county_id})")
     return sub_counties
 
-
+# Parishes in a sub-county
 @router.get("/locations/parishes/{sub_county_id}", response_model=List[Location], summary="Get parishes in a sub-county")
 async def get_parishes(sub_county_id: str):
     subcounty = uga_locale.find_subcounty_by_id(sub_county_id)
@@ -240,7 +247,7 @@ async def get_parishes(sub_county_id: str):
         raise HTTPException(status_code=404, detail=f"No parishes found for sub-county '{subcounty['name']}' (id: {sub_county_id})")
     return parishes
 
-
+# Villages in a parish
 @router.get("/locations/villages/{parish_id}", response_model=List[Location], summary="Get villages in a parish")
 async def get_villages(parish_id: str):
     parish = uga_locale.find_parish_by_id(parish_id)
