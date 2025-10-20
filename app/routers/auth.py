@@ -209,6 +209,49 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     return UserOut.model_validate(user)
 
 
+# Uganda location endpoints
+@router.get("/locations/counties/{district_id}", response_model=List[Location], summary="Get counties in a district")
+async def get_counties(district_id: str):
+    district = uga_locale.find_district_by_id(district_id)
+    if not district:
+        raise HTTPException(status_code=404, detail=f"District with id '{district_id}' not found")
+    counties = uga_locale.get_counties(district_id)
+    return counties
+
+
+@router.get("/locations/sub-counties/{county_id}", response_model=List[Location], summary="Get sub-counties in a county")
+async def get_sub_counties(county_id: str):
+    county = uga_locale.find_county_by_id(county_id)
+    if not county:
+        raise HTTPException(status_code=404, detail=f"County with id '{county_id}' not found")
+    sub_counties = uga_locale.get_sub_counties(county_id)
+    if not sub_counties:
+        raise HTTPException(status_code=404, detail=f"No sub-counties found for county '{county['name']}' (id: {county_id})")
+    return sub_counties
+
+
+@router.get("/locations/parishes/{sub_county_id}", response_model=List[Location], summary="Get parishes in a sub-county")
+async def get_parishes(sub_county_id: str):
+    subcounty = uga_locale.find_subcounty_by_id(sub_county_id)
+    if not subcounty:
+        raise HTTPException(status_code=404, detail=f"Sub-county with id '{sub_county_id}' not found")
+    parishes = uga_locale.get_parishes(sub_county_id)
+    if not parishes:
+        raise HTTPException(status_code=404, detail=f"No parishes found for sub-county '{subcounty['name']}' (id: {sub_county_id})")
+    return parishes
+
+
+@router.get("/locations/villages/{parish_id}", response_model=List[Location], summary="Get villages in a parish")
+async def get_villages(parish_id: str):
+    parish = uga_locale.find_parish_by_id(parish_id)
+    if not parish:
+        raise HTTPException(status_code=404, detail=f"Parish with id '{parish_id}' not found")
+    villages = uga_locale.get_villages(parish_id)
+    if not villages:
+        raise HTTPException(status_code=404, detail=f"No villages found for parish '{parish['name']}' (id: {parish_id})")
+    return villages
+
+
 # Endpoints
 @router.post("/signup", response_model=User, status_code=status.HTTP_201_CREATED)
 async def signup(
