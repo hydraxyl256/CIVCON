@@ -70,9 +70,6 @@ class User(Base):
     region = Column(String, nullable=True)
     district_id = Column(String, nullable=True)
     county_id = Column(String, nullable=True)
-    sub_county_id = Column(String, nullable=True)
-    parish_id = Column(String, nullable=True)
-    village_id = Column(String, nullable=True)
     phone_number = Column(String, unique=True, index=True, nullable=True)
 
     # Profile
