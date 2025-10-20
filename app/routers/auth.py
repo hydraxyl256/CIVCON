@@ -3,7 +3,8 @@ from fastapi.responses import RedirectResponse
 import os
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
+from functools import lru_cache
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from pydantic import EmailStr
 from jose import jwt, JWTError
@@ -20,6 +21,9 @@ from app.config import settings
 from app.schemas import ResetPasswordSchema
 from authlib.integrations.starlette_client import OAuth
 from sqlalchemy.future import select
+import logging
+import requests
+from pydantic import BaseModel 
 
 
 
@@ -70,7 +74,78 @@ oauth.register(
     client_kwargs={"scope": "r_liteprofile r_emailaddress"},
 )
 
-#
+# Configure logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class Location(BaseModel):
+    id: str
+    name: str
+
+class UgandaLocaleComplete:
+    def __init__(self):
+        self.base_url = "https://raw.githubusercontent.com/paulgrammer/ug-locale/main"
+        self.districts_data = None
+        self.counties_data = None
+        self.subcounties_data = None
+        self.parishes_data = None
+        self.villages_data = None
+        self._load_data()
+
+    def _load_data(self):
+        try:
+            logger.info("Loading Uganda administrative data...")
+            self.districts_data = requests.get(f"{self.base_url}/districts.json").json()
+            self.counties_data = requests.get(f"{self.base_url}/counties.json").json()
+            self.subcounties_data = requests.get(f"{self.base_url}/subcounties.json").json()
+            self.parishes_data = requests.get(f"{self.base_url}/parishes.json").json()
+            self.villages_data = requests.get(f"{self.base_url}/villages.json").json()
+            logger.info("All data loaded successfully!")
+        except Exception as e:
+            logger.error(f"Error loading data: {e}")
+            # Set to empty lists on failure
+            self.districts_data = []
+            self.counties_data = []
+            self.subcounties_data = []
+            self.parishes_data = []
+            self.villages_data = []
+
+    @lru_cache(maxsize=None)
+    def get_districts(self) -> List[Location]:
+        return [Location(id=d["id"], name=d["name"]) for d in self.districts_data]
+
+    @lru_cache(maxsize=None)
+    def get_counties(self, district_id: str) -> List[Location]:
+        return [Location(id=c["id"], name=c["name"]) for c in self.counties_data if c.get("district") == district_id]
+
+    @lru_cache(maxsize=None)
+    def get_sub_counties(self, county_id: str) -> List[Location]:
+        return [Location(id=sc["id"], name=sc["name"]) for sc in self.subcounties_data if sc.get("county") == county_id]
+
+    @lru_cache(maxsize=None)
+    def get_parishes(self, sub_county_id: str) -> List[Location]:
+        return [Location(id=p["id"], name=p["name"]) for p in self.parishes_data if p.get("subcounty") == sub_county_id]
+
+    @lru_cache(maxsize=None)
+    def get_villages(self, parish_id: str) -> List[Location]:
+        return [Location(id=v["id"], name=v["name"]) for v in self.villages_data if v.get("parish") == parish_id]
+
+    def find_district_by_id(self, district_id: str) -> Optional[dict]:
+        return next((d for d in self.districts_data if d.get("id") == district_id), None)
+
+    def find_county_by_id(self, county_id: str) -> Optional[dict]:
+        return next((c for c in self.counties_data if c.get("id") == county_id), None)
+
+    def find_subcounty_by_id(self, subcounty_id: str) -> Optional[dict]:
+        return next((sc for sc in self.subcounties_data if sc.get("id") == subcounty_id), None)
+
+    def find_parish_by_id(self, parish_id: str) -> Optional[dict]:
+        return next((p for p in self.parishes_data if p.get("id") == parish_id), None)
+
+# Instantiate
+uga_locale = UgandaLocaleComplete()
+
+
 # Helpers
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
@@ -226,7 +301,7 @@ async def forgot_password(email: EmailStr, db: AsyncSession = Depends(get_db)):
         return {"message": "If that email exists, a reset link was sent."}
 
     reset_token = create_access_token({"sub": user.email, "scope": "password_reset"}, expires_delta=timedelta(minutes=30))
-    reset_link = f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/reset-password?token={reset_token}"
+    reset_link = f"{os.getenv('FRONTEND_URL', 'https://civ-con-sh2j.vercel.app/')}/reset-password?token={reset_token}"
 
     # Send the actual email
     await send_reset_email(user.email, reset_link)
