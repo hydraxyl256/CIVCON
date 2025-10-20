@@ -24,6 +24,7 @@ from sqlalchemy.future import select
 import logging
 import requests
 from pydantic import BaseModel 
+from app.schemas import Location, ForgotPasswordRequest
 
 
 
@@ -78,9 +79,6 @@ oauth.register(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class Location(BaseModel):
-    id: str
-    name: str
 
 class UgandaLocaleComplete:
     def __init__(self):
@@ -344,17 +342,19 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
 
 # Forgot password (sends token) - actual sending via FastMail or an external service
 @router.post("/forgot-password")
-async def forgot_password(email: EmailStr, db: AsyncSession = Depends(get_db)):
+async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    email = request.email
     user = await get_user_by_email(db, email)
     if not user:
-        # Don't reveal existence
         return {"message": "If that email exists, a reset link was sent."}
 
-    reset_token = create_access_token({"sub": user.email, "scope": "password_reset"}, expires_delta=timedelta(minutes=30))
+    reset_token = create_access_token(
+        {"sub": email, "scope": "password_reset"},
+        expires_delta=timedelta(minutes=30)
+    )
     reset_link = f"{os.getenv('FRONTEND_URL', 'https://civ-con-sh2j.vercel.app/')}/reset-password?token={reset_token}"
 
-    # Send the actual email
-    await send_reset_email(user.email, reset_link)
+    await send_reset_email(email, reset_link)
 
     return {"message": "Password reset email sent successfully."}
 

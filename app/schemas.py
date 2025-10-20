@@ -340,3 +340,10 @@ class UserResponse(BaseModel):
 class ResetPasswordSchema(BaseModel):
     token: str
     new_password: str
+
+class Location(BaseModel):
+    id: str
+    name: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
