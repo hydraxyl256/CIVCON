@@ -20,9 +20,6 @@ class UserBase(BaseModel):
     region: Optional[str] = None
     district_id: Optional[str] = None
     county_id: Optional[str] = None
-    sub_county_id: Optional[str] = None
-    parish_id: Optional[str] = None
-    village_id: Optional[str] = None
     occupation: Optional[str] = None
     bio: Optional[str] = None
     profile_image: Optional[str] = None
@@ -93,7 +90,7 @@ class PostCreate(BaseModel):
 class CommentCreate(BaseModel):
     content: str
     post_id: int
-    parent_id: Optional[int] = None  # for nested replies
+    parent_id: Optional[int] = None  
 
 # Forward declare CommentResponse for nesting
 class CommentResponse(BaseModel):
@@ -299,9 +296,6 @@ class UserUpdate(BaseModel):
     region: str | None
     district_id: str | None
     county_id: str | None
-    sub_county_id: str | None
-    parish_id: str | None
-    village_id: str | None
     occupation: str | None
     bio: str | None
     political_interest: str | None
@@ -320,9 +314,6 @@ class UserResponse(BaseModel):
     region: str | None
     district_id: str | None
     county_id: str | None
-    sub_county_id: str | None
-    parish_id: str | None
-    village_id: str | None
     occupation: str | None
     bio: str | None
     profile_image: str | None
