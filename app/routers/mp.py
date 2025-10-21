@@ -1,17 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import or_
 from datetime import datetime
 import asyncio
-import re
 import logging
 import africastalking
-from sqlalchemy import or_
 
 from app.database import get_db
 from app.models import Message, User, MP, Role
 from app.config import settings
-from app.routers.oauth2 import get_current_user  # adjust import if needed
+from app.routers.oauth2 import get_current_user
 from app.utils.phone_utils import normalize_phone_number
 
 router = APIRouter(prefix="/mp", tags=["MP"])
@@ -21,20 +20,16 @@ logger = logging.getLogger(__name__)
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
-
-
-# Helper: Async SMS sender
+# Async SMS sender
 async def send_sms_async(phone: str, message: str):
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: sms.send(message=message, recipients=[phone]))
-        logger.info(f" SMS sent to {phone}")
+        logger.info(f"SMS sent to {phone}")
     except Exception as e:
-        logger.error(f" Failed to send SMS: {e}")
+        logger.error(f"Failed to send SMS: {e}")
 
-
-
-# MP Inbox - All Conversations
+#  MP Inbox 
 @router.get("/inbox")
 async def get_inbox(
     db: AsyncSession = Depends(get_db),
@@ -52,7 +47,6 @@ async def get_inbox(
     if not mp:
         raise HTTPException(status_code=404, detail="MP profile not found.")
 
-    # Build query
     query = select(Message).where(Message.recipient_id == current_user.id)
 
     if search:
@@ -64,16 +58,12 @@ async def get_inbox(
             )
         )
 
-    # Order by creation time
     query = query.order_by(Message.created_at.asc())
-
-    # Pagination
     offset = (page - 1) * limit
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     messages = result.scalars().all()
 
-    # Group by sender
     conversations = {}
     for msg in messages:
         sender_id = msg.sender_id
@@ -98,9 +88,7 @@ async def get_inbox(
         "conversations": conversations
     }
 
-
-
-# MP Reply - Respond to Citizen
+# MP Reply 
 @router.post("/reply")
 async def mp_reply(
     message_id: int,
@@ -127,7 +115,7 @@ async def mp_reply(
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found.")
 
-    # Save MP reply as a new message in thread
+    # Save MP reply as a new message
     reply_msg = Message(
         sender_id=current_user.id,
         recipient_id=citizen.id,
@@ -156,9 +144,7 @@ async def mp_reply(
 
     return {"status": "success", "message": "Reply sent successfully and citizen notified."}
 
-
-
-# MP Conversation View - Full Chat
+# MP Conversation 
 @router.get("/conversation/{citizen_id}")
 async def view_conversation(
     citizen_id: int,
@@ -168,7 +154,6 @@ async def view_conversation(
     if current_user.role != Role.MP:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied. MPs only.")
 
-    # Get conversation between MP and citizen
     result = await db.execute(
         select(Message)
         .where(
@@ -178,9 +163,6 @@ async def view_conversation(
         .order_by(Message.created_at.asc())
     )
     messages = result.scalars().all()
-
-    if not messages:
-        return {"conversation": [], "message": "No messages found with this citizen."}
 
     conversation = [
         {
