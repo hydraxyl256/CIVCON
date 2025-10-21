@@ -158,28 +158,43 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
         #  REGISTER DISTRICT 
         elif step == "register_district":
-            current_input = user_response[-1] if user_response else None
-            if current_input:
-                user_data["district"] = current_input.title()
+            if user_response:
+                user_data["district"] = user_response[-1].title()
                 session["data"] = user_data
                 names = user_data["name"].split(" ")
                 first_name, last_name = names[0], names[-1] if len(names) > 1 else ""
-                new_user = User(
-                    first_name=first_name,
-                    last_name=last_name,
-                    phone_number=phone_number,
-                    district_id=user_data["district"],
-                    is_active=True,
-                    role=RoleEnum.CITIZEN,
-                    preferred_language=language,
-                )
-                db.add(new_user)
-                await db.commit()
-                await db.refresh(new_user)
+
+                # Check if user already exists
+                result = await db.execute(select(User).where(User.phone_number == phone_number))
+                existing_user = result.scalars().first()
+
+                if not existing_user:
+                    # Create new user
+                    new_user = User(
+                        first_name=first_name,
+                        last_name=last_name,
+                        phone_number=phone_number,
+                        district_id=user_data["district"],
+                        is_active=True,
+                        role=RoleEnum.CITIZEN,
+                        preferred_language=language,
+                    )
+                    db.add(new_user)
+                    await db.commit()
+                    await db.refresh(new_user)
+                    user = new_user  
+                else:
+                    # Use existing user
+                    user = existing_user
+                    language = user.preferred_language or language
+                    session["language"] = language
+
                 session["step"] = "topic_menu"
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
             else:
                 response_text = f"CON {PROMPTS['register_district'][language]}"
+                
+
 
         #  TOPIC SELECTION 
         elif step == "topic_menu":
