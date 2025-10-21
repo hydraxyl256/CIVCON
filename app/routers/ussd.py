@@ -68,7 +68,7 @@ def format_topics(lang):
     return "\n".join([f"{i+1}. {topic}" for i, topic in enumerate(TOPICS[lang])])
 
 # Redis helpers
-async def save_session(session_id, data, expire=3600):
+async def save_session(session_id, data, expire=180):  # 3 min timeout
     redis = await get_redis()
     await redis.set(session_id, json.dumps(data), ex=expire)
 
@@ -86,22 +86,17 @@ async def send_sms_async(phone: str, message: str):
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: sms.send(message=message, recipients=[phone]))
-        logger.info(f" SMS sent to {phone}")
+        logger.info(f"SMS sent to {phone}")
     except Exception as e:
-        logger.error(f" Failed to send SMS: {e}")
+        logger.error(f"Failed to send SMS: {e}")
 
 # USSD endpoint
-
 @router.post("/ussd_callback")
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
-        # Determine request type
         content_type = request.headers.get("content-type", "")
-        if "application/json" in content_type:
-            data = await request.json()
-        else:
-            form = await request.form()
-            data = dict(form)
+        data = await (request.json() if "application/json" in content_type else request.form())
+        data = dict(data)
 
         session_id = data.get("sessionId")
         phone_number = normalize_phone_number(data.get("phoneNumber"))
@@ -110,155 +105,141 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
         logger.info(f"Incoming USSD request: {data}")
 
-        # Load or initialize session
-        session = await load_session(session_id) or {"step": "start", "language": "EN", "data": {}}
-        step = session.get("step", "start")
+        # Load session or detect expiry
+        session = await load_session(session_id)
+        if not session:
+            # Session expired or new user
+            session = {"step": "select_language", "language": "EN", "data": {}}
+            response_text = (
+                "CON Please select language:\n"
+                "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
+            )
+            await save_session(session_id, session)
+            return PlainTextResponse(content=response_text)
+
+        step = session.get("step", "select_language")
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
-        # Check user existence
-        result = await db.execute(select(User).where(User.phone_number == phone_number))
-        user = result.scalars().first()
-
-
-        # RETURNING USER FLOW
-        if user:
-            language = user.preferred_language or language
-            session["language"] = language
-            session["step"] = "topic_menu"
-
-            if len(user_response) == 0:
-                response_text = f"CON Ask question:\n{format_topics(language)}"
-
-            elif len(user_response) == 1:
-                choice = user_response[0]
-                topics_list = TOPICS[language]
-
-                if choice.isdigit() and 1 <= int(choice) <= len(topics_list):
-                    user_data["topic"] = topics_list[int(choice) - 1]
-                    session["step"] = "ask_question"
-                    response_text = f"CON {PROMPTS['question'][language]}"
-                else:
-                    response_text = (
-                        f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
-                    )
-
-            elif len(user_response) >= 2:
-                question = user_response[1][:160]  # max 160 chars
-                topic = user_data.get("topic", "General")
-
-                # Match MP based on district name (case-insensitive)
-                mp_result = await db.execute(select(MP))
-                mps = mp_result.scalars().all()
-                mp = next(
-                    (m for m in mps if (m.district_id or "").lower() == (user.district_id or "").lower()),
-                    None
+        # Step 1: Language selection
+        if step == "select_language":
+            if not user_response:
+                response_text = (
+                    "CON Please select language:\n"
+                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
                 )
-                recipient_id = mp.id if mp else None
-
-                # Save message
-                msg = Message(
-                    sender_id=user.id,
-                    recipient_id=recipient_id,
-                    content=question,
-                    district_id=user.district_id,
-                    created_at=datetime.utcnow(),
-                    mp_id=recipient_id,
-                )
-                db.add(msg)
-                await db.commit()
-
-                # Send SMS to MP if exists
-                if mp and mp.phone_number:
-                    try:
-                        recipient_phone = normalize_phone_number(mp.phone_number)
-                        if not recipient_phone.startswith("+256"):
-                            recipient_phone = "+256" + recipient_phone.lstrip("0")
-                        await send_sms_async(
-                            phone=recipient_phone,
-                            message=f"New message from {user.first_name or 'a citizen'} ({user.district_id}): {question}",
-                        )
-                    except Exception as sms_err:
-                        logger.error(f"Failed to send SMS to MP: {sms_err}")
-                else:
-                    logger.warning(f"No MP found for district {user.district_id}")
-
-                await delete_session(session_id)
-                return {"response": "END Thank you! Your message has been sent to your area MP."}
-
-    
-        # NEW USER REGISTRATION FLOW
-        else:
-            if step == "start":
-                response_text = f"CON {WELCOME_MSG[language]}\nDo you consent?\n1. Yes\n0. No"
-                session["step"] = "consent"
-
-            elif step == "consent":
-                if not user_response:
+            else:
+                lang_choice = user_response[-1]
+                if lang_choice in LANGUAGES:
+                    language = LANGUAGES[lang_choice]
+                    session["language"] = language
+                    session["step"] = "start"
                     response_text = f"CON {WELCOME_MSG[language]}\nDo you consent?\n1. Yes\n0. No"
-                elif user_response[-1] == "1":
-                    session["step"] = "register_name"
-                    response_text = f"CON {PROMPTS['register_name'][language]}"
                 else:
-                    return {"response": "END You must consent to continue."}
+                    response_text = "CON Invalid choice.\nPlease select language:\n1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
 
-            elif step == "register_name":
-                if user_response:
-                    user_data["name"] = user_response[-1]
-                    session["step"] = "register_district"
-                    response_text = f"CON {PROMPTS['register_district'][language]}"
-                else:
-                    response_text = f"CON {PROMPTS['register_name'][language]}"
+        # Step 2: Consent
+        elif step == "start":
+            if not user_response:
+                response_text = f"CON {WELCOME_MSG[language]}\nDo you consent?\n1. Yes\n0. No"
+            elif user_response[-1] == "1":
+                session["step"] = "register_name"
+                response_text = f"CON {PROMPTS['register_name'][language]}"
+            else:
+                return PlainTextResponse(content="END You must consent to continue.")
 
-            elif step == "register_district":
-                if user_response:
-                    user_data["district"] = user_response[-1].title()
+        # Step 3: Registration
+        elif step == "register_name":
+            if user_response:
+                user_data["name"] = user_response[-1]
+                session["step"] = "register_district"
+                response_text = f"CON {PROMPTS['register_district'][language]}"
+            else:
+                response_text = f"CON {PROMPTS['register_name'][language]}"
 
-                    # Save new user
-                    names = user_data["name"].split(" ")
-                    first_name = names[0]
-                    last_name = names[-1] if len(names) > 1 else ""
+        elif step == "register_district":
+            if user_response:
+                user_data["district"] = user_response[-1].title()
+                names = user_data["name"].split(" ")
+                first_name = names[0]
+                last_name = names[-1] if len(names) > 1 else ""
+                new_user = User(
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone_number=phone_number,
+                    district_id=user_data["district"],
+                    is_active=True,
+                    role=RoleEnum.CITIZEN,
+                    preferred_language=language,
+                )
+                db.add(new_user)
+                await db.commit()
+                session["step"] = "topic_menu"
+                response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
+            else:
+                response_text = f"CON {PROMPTS['register_district'][language]}"
 
-                    new_user = User(
-                        first_name=first_name,
-                        last_name=last_name,
-                        phone_number=phone_number,
-                        district_id=user_data["district"],
-                        is_active=True,
-                        role=RoleEnum.CITIZEN,
-                        preferred_language=language,
+        # Step 4: Existing User Flow
+        else:
+            result = await db.execute(select(User).where(User.phone_number == phone_number))
+            user = result.scalars().first()
+            if user:
+                language = user.preferred_language or language
+                session["language"] = language
+                if len(user_response) == 0:
+                    response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
+                elif len(user_response) == 1:
+                    choice = user_response[0]
+                    topics = TOPICS[language]
+                    if choice.isdigit() and 1 <= int(choice) <= len(topics):
+                        user_data["topic"] = topics[int(choice) - 1]
+                        session["step"] = "ask_question"
+                        response_text = f"CON {PROMPTS['question'][language]}"
+                    else:
+                        response_text = f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
+                elif len(user_response) >= 2:
+                    question = user_response[1][:160]
+                    topic = user_data.get("topic", "General")
+                    mp_result = await db.execute(select(MP))
+                    mps = mp_result.scalars().all()
+                    mp = next((m for m in mps if (m.district_id or "").lower() == (user.district_id or "").lower()), None)
+                    recipient_id = mp.id if mp else None
+                    msg = Message(
+                        sender_id=user.id,
+                        recipient_id=recipient_id,
+                        content=question,
+                        district_id=user.district_id,
+                        created_at=datetime.utcnow(),
+                        mp_id=recipient_id,
                     )
-                    db.add(new_user)
+                    db.add(msg)
                     await db.commit()
-                    await db.refresh(new_user)
+                    if mp and mp.phone_number:
+                        try:
+                            recipient_phone = normalize_phone_number(mp.phone_number)
+                            if not recipient_phone.startswith("+256"):
+                                recipient_phone = "+256" + recipient_phone.lstrip("0")
+                            await send_sms_async(
+                                phone=recipient_phone,
+                                message=f"New message from {user.first_name or 'a citizen'} ({user.district_id}): {question}",
+                            )
+                        except Exception as sms_err:
+                            logger.error(f"Failed to send SMS: {sms_err}")
+                    await delete_session(session_id)
+                    return PlainTextResponse(content="END Thank you! Your message has been sent to your MP.")
+            else:
+                session["step"] = "select_language"
+                response_text = (
+                    "CON Please select language:\n"
+                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
+                )
 
-                    session["step"] = "topic_menu"
-                    response_text = f"CON Ask question:\n{format_topics(language)}"
-                else:
-                    response_text = f"CON {PROMPTS['register_district'][language]}"
-
-            elif step == "topic_menu":
-                response_text = f"CON Ask question:\n{format_topics(language)}"
-
-        # Save session
+        # Save session with timeout refresh
         session["data"] = user_data
         await save_session(session_id, session)
-        logger.info(f"Session saved: {session}")
-
         return PlainTextResponse(content=response_text)
-
 
     except Exception as e:
         logger.error(f"USSD callback error: {e}", exc_info=True)
         await db.rollback()
         return PlainTextResponse(content="END Sorry, something went wrong. Please try again shortly.")
-
-
-
-
-
-
-
-
-
-
