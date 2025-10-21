@@ -21,7 +21,7 @@ logger = logging.getLogger("app.routers.ussd")
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
-# Languages
+# Supported languages
 LANGUAGES = {"1": "EN", "2": "LG", "3": "RN", "4": "LU", "5": "SW", "6": "RT"}
 
 WELCOME_MSG = {
@@ -44,8 +44,8 @@ PROMPTS = {
         "SW": "Weka eneo lako au wilaya:", "RT": "Andika district yo:"
     },
     "ask_topic": {
-        "EN": "Select topic:\n", "LG": "Londa ekitundu:\n", "RN": "Hitamo ekitundu:\n",
-        "LU": "Londo topic:\n", "SW": "Chagua mada:\n", "RT": "Londa ekitundu:\n"
+        "EN": "Ask question:\n", "LG": "Buuza ekibuuzo:\n", "RN": "Buuza ekibuuzo:\n",
+        "LU": "Penyo kwayo:\n", "SW": "Uliza swali:\n", "RT": "Buuza ekibuuzo:\n"
     },
     "question": {
         "EN": "Enter your question (max 160 chars):", "LG": "Wandika ekibuuzo kyo (obutayinza kusukka ku 160):",
@@ -66,7 +66,7 @@ TOPICS = {
 def format_topics(lang):
     return "\n".join([f"{i+1}. {topic}" for i, topic in enumerate(TOPICS[lang])])
 
-# --- Redis Helpers ---
+# Redis helpers
 async def save_session(session_id, data, expire=600):
     redis = await get_redis()
     await redis.set(session_id, json.dumps(data), ex=expire)
@@ -80,7 +80,7 @@ async def delete_session(session_id):
     redis = await get_redis()
     await redis.delete(session_id)
 
-#  Async SMS 
+# Async SMS sender
 async def send_sms_async(phone: str, message: str):
     try:
         loop = asyncio.get_event_loop()
@@ -89,21 +89,22 @@ async def send_sms_async(phone: str, message: str):
     except Exception as e:
         logger.error(f"Failed to send SMS: {e}")
 
-# Get MPs (cached) 
+# Cache MPs in Redis for performance
 async def get_mps(db: AsyncSession):
     redis = await get_redis()
-    cached = await redis.get("all_mps")
-    if cached:
-        return [MP(**m) for m in json.loads(cached)]
+    cached_mps = await redis.get("all_mps")
+    if cached_mps:
+        return [MP(**m) for m in json.loads(cached_mps)]
     result = await db.execute(select(MP))
     mps = result.scalars().all()
     await redis.set("all_mps", json.dumps([{"id": m.id, "user_id": m.user_id, "district_id": m.district_id, "phone_number": m.phone_number} for m in mps]), ex=1800)
     return mps
 
-# --- USSD Callback ---
+#  MAIN USSD CALLBACK 
 @router.post("/ussd_callback")
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
+        # Load request data
         content_type = request.headers.get("content-type", "")
         data = await (request.json() if "application/json" in content_type else request.form())
         data = dict(data)
@@ -115,139 +116,130 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
         logger.info(f"USSD request: {data}")
 
-        session = await load_session(session_id)
-        if not session:
-            session = {"step": "consent", "language": "EN", "data": {}}
-            await save_session(session_id, session)
-            return PlainTextResponse(content=f"CON {WELCOME_MSG['EN']}\nDo you consent?\n1. Yes\n0. No")
-
-        step = session.get("step", "consent")
+        # Load or create session
+        session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}}
+        step = session.get("step")
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
         #  CONSENT 
         if step == "consent":
-            if not user_response:
-                response_text = f"CON {WELCOME_MSG['EN']}\nDo you consent?\n1. Yes\n0. No"
-            elif user_response[-1] == "1":
-                session["step"] = "select_language"
-                response_text = "CON Please select language:\n1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
-            else:
-                return PlainTextResponse(content="END You must consent to continue.")
+            if not user_response or user_response[-1] != "1":
+                await save_session(session_id, session)
+                return PlainTextResponse(content=f"CON {WELCOME_MSG['EN']}\nDo you consent?\n1. Yes\n0. No")
+            session["step"] = "select_language"
 
         #  LANGUAGE SELECTION 
-        elif step == "select_language":
-            choice = user_response[-1] if user_response else None
-            if choice in LANGUAGES:
-                language = LANGUAGES[choice]
+        if step == "select_language":
+            lang_choice = user_response[-1] if user_response else None
+            if lang_choice in LANGUAGES:
+                language = LANGUAGES[lang_choice]
                 session["language"] = language
                 session["step"] = "register_name"
-                response_text = f"CON {PROMPTS['register_name'][language]}"
             else:
-                response_text = "CON Invalid choice. Please select a valid language."
+                await save_session(session_id, session)
+                return PlainTextResponse(content="CON Invalid choice.\nPlease select language:\n1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro")
 
         #  REGISTER NAME 
-        elif step == "register_name":
-            if user_response:
-                user_data["name"] = user_response[-1]
-                session["data"] = user_data
-                session["step"] = "register_district"
-                response_text = f"CON {PROMPTS['register_district'][language]}"
-            else:
-                response_text = f"CON {PROMPTS['register_name'][language]}"
+        if step == "register_name":
+            if not user_response:
+                await save_session(session_id, session)
+                return PlainTextResponse(content=f"CON {PROMPTS['register_name'][language]}")
+            user_data["name"] = user_response[-1]
+            session["data"] = user_data
+            session["step"] = "register_district"
 
         #  REGISTER DISTRICT 
-        elif step == "register_district":
-            if user_response:
-                user_data["district"] = user_response[-1].title()
-                session["data"] = user_data
-                names = user_data["name"].split(" ")
-                first_name, last_name = names[0], names[-1] if len(names) > 1 else ""
-                new_user = User(
-                    first_name=first_name,
-                    last_name=last_name,
-                    phone_number=phone_number,
-                    district_id=user_data["district"],
-                    is_active=True,
-                    role=RoleEnum.CITIZEN,
-                    preferred_language=language,
-                )
-                db.add(new_user)
-                await db.commit()
-                await db.refresh(new_user)
-                session["step"] = "topic_menu"
-                response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
-            else:
-                response_text = f"CON {PROMPTS['register_district'][language]}"
+        if step == "register_district":
+            if not user_response:
+                await save_session(session_id, session)
+                return PlainTextResponse(content=f"CON {PROMPTS['register_district'][language]}")
+            user_data["district"] = user_response[-1].title()
+            session["data"] = user_data
+            # Save new user
+            names = user_data["name"].split(" ")
+            new_user = User(
+                first_name=names[0],
+                last_name=names[-1] if len(names) > 1 else "",
+                phone_number=phone_number,
+                district_id=user_data["district"],
+                is_active=True,
+                role=RoleEnum.CITIZEN,
+                preferred_language=language,
+            )
+            db.add(new_user)
+            await db.commit()
+            await db.refresh(new_user)
+            session["step"] = "topic_menu"
 
-        # TOPIC SELECTION 
-        elif step == "topic_menu":
+        #  TOPIC SELECTION & QUESTION 
+        if session["step"] in ["topic_menu", "ask_question"]:
+            # Ensure user exists
             result = await db.execute(select(User).where(User.phone_number == phone_number))
             user = result.scalars().first()
             if not user:
                 return PlainTextResponse(content="END User not found. Please register again.")
+
             language = user.preferred_language or language
             session["language"] = language
+            topics_list = TOPICS[language]
 
-            if not user_response or not user_response[-1].strip():
-                response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
-            else:
+            if session["step"] == "topic_menu":
+                if not user_response:
+                    await save_session(session_id, session)
+                    return PlainTextResponse(content=f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}")
                 choice = user_response[-1]
-                topics_list = TOPICS[language]
                 if choice.isdigit() and 1 <= int(choice) <= len(topics_list):
-                    user_data["topic"] = topics_list[int(choice) - 1]
+                    user_data["topic"] = topics_list[int(choice)-1]
                     session["data"] = user_data
                     session["step"] = "ask_question"
-                    response_text = f"CON {PROMPTS['question'][language]}"
+                    await save_session(session_id, session)
+                    return PlainTextResponse(content=f"CON {PROMPTS['question'][language]}")
                 else:
-                    response_text = f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
+                    await save_session(session_id, session)
+                    return PlainTextResponse(content=f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}")
 
-        #  ASK QUESTION 
-        elif step == "ask_question":
-            if not user_response or not user_response[-1].strip():
-                response_text = f"CON {PROMPTS['question'][language]}"
-            else:
+            elif session["step"] == "ask_question":
+                if not user_response:
+                    await save_session(session_id, session)
+                    return PlainTextResponse(content=f"CON {PROMPTS['question'][language]}")
                 question = user_response[-1][:160]
-                topic = user_data.get("topic", "General")
 
+                # Determine MP recipient
                 mps = await get_mps(db)
-                user_district = (user.district_id or "").lower().replace("district", "").strip()
-                mp = next(
-                    (m for m in mps
-                     if user_district in (m.district_id or "").lower().replace("district", "").strip()
-                     or (m.district_id or "").lower().replace("district", "").strip() in user_district),
-                    None
-                )
-
-                fallback_phone = "+256784437652"
+                user_district = (user.district_id or "").lower().replace("district","").strip()
+                mp = next((m for m in mps if user_district in (m.district_id or "").lower().replace("district","").strip()), None)
                 recipient_id = mp.id if mp else None
-                recipient_phone = mp.phone_number if mp else fallback_phone
+                recipient_phone = mp.phone_number if mp else "+256784437652"
 
+                # Save message
                 msg = Message(
                     sender_id=user.id,
                     recipient_id=recipient_id,
                     content=question,
                     district_id=user.district_id,
                     created_at=datetime.utcnow(),
-                    mp_id=recipient_id,
+                    mp_id=recipient_id
                 )
                 db.add(msg)
                 await db.commit()
 
-                if recipient_phone:
-                    normalized_recipient = normalize_phone_number(recipient_phone)
-                    if not normalized_recipient.startswith("+256"):
-                        normalized_recipient = "+256" + normalized_recipient.lstrip("0")
-                    await send_sms_async(
-                        phone=normalized_recipient,
-                        message=f"New message from {user.first_name or 'a citizen'} ({user.district_id}): {question}",
-                    )
+                # Send SMS
+                normalized_recipient = normalize_phone_number(recipient_phone)
+                if not normalized_recipient.startswith("+256"):
+                    normalized_recipient = "+256" + normalized_recipient.lstrip("0")
+                await send_sms_async(
+                    phone=normalized_recipient,
+                    message=f"New message from {user.first_name or 'a citizen'} ({user.district_id}): {question}"
+                )
 
+                # End session
                 await delete_session(session_id)
                 return PlainTextResponse(content="END Thank you! Your message has been sent to your MP or civic office.")
 
+        # Save session at the end
         await save_session(session_id, session)
-        return PlainTextResponse(content=response_text)
+        return PlainTextResponse(content=f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}")
 
     except Exception as e:
         logger.error(f"USSD callback error: {e}", exc_info=True)
