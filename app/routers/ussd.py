@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from datetime import datetime
@@ -244,12 +245,14 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         await save_session(session_id, session)
         logger.info(f"Session saved: {session}")
 
-        return {"response": response_text}
+        return PlainTextResponse(content=response_text)
+
 
     except Exception as e:
         logger.error(f"USSD callback error: {e}", exc_info=True)
         await db.rollback()
-        return {"response": "END Dear customer, the network is experiencing technical problems. Please try again later."}
+        return PlainTextResponse(content="END Sorry, something went wrong. Please try again shortly.")
+
 
 
 
