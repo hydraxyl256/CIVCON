@@ -38,12 +38,12 @@ spam_detector = SpamDetector()
 LANGUAGES = {"1": "EN", "2": "LG", "3": "RN", "4": "LU", "5": "SW", "6": "RT"}
 
 WELCOME_MSG = {
-    "EN": "Welcome to CIVCON! Raise civic issues with your MP.",
-    "LG": "Tukwaniriza ku CIVCON! Wandiika obuzibu bwo eri MP wo.",
-    "RN": "Okwanjwa ku CIVCON! Tegereza ebizibu byo eri MP wawe.",
-    "LU": "Mabero ku CIVCON! Wek ayie gi MP mamegi.",
-    "SW": "Karibu CIVCON! Toa hoja zako kwa mbunge wako.",
-    "RT": "Tukwaniriza ku CIVCON! Wandiika ebizibu byo eri MP wawe."
+    "EN": "Welcome to CIVCON! Raise civic issues with your MP.\n1. Consent to continue",
+    "LG": "Tukwaniriza ku CIVCON! Wandiika obuzibu bwo eri MP wo.\n1. Okukkiriza okweyongerayo",
+    "RN": "Okwanjwa ku CIVCON! Tegereza ebizibu byo eri MP wawe.\n1. Okwemera okugumya",
+    "LU": "Mabero ku CIVCON! Wek ayie gi MP mamegi.\n1. Yie me medo",
+    "SW": "Karibu CIVCON! Toa hoja zako kwa mbunge wako.\n1. Idhini ya kuendelea",
+    "RT": "Tukwaniriza ku CIVCON! Wandiika ebizibu byo eri MP wawe.\n1. Okukkiriza okweyongerayo"
 }
 
 PROMPTS = {
@@ -78,6 +78,14 @@ PROMPTS = {
         "LU": "Ket penyo ni (160 ki neno, peki lok marac):",
         "SW": "Weka swali lako (si zaidi ya herufi 160, hakuna maneno ya matusi):",
         "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160, tewali bigambo by'okuzirira):"
+    },
+    "returning_language_option": {
+        "EN": "Your current language is {lang}. Change language?\n1. Yes\n2. No\n0. Back",
+        "LG": "Lugambo lwo lwa {lang}. Okukyusa lugambo?\n1. Ye\n2. Nedda\n0. Emabega",
+        "RN": "Ururimi rwawe ni {lang}. Okurihindura?\n1. Yego\n2. Oya\n0. Inyuma",
+        "LU": "Lok ma itiyo kede ni {lang}. Bedo adwong?\n1. Eyo\n2. Pe\n0. Cen",
+        "SW": "Lugha yako ya sasa ni {lang}. Badilisha lugha?\n1. Ndio\n2. Hapana\n0. Rudi",
+        "RT": "Orurimi rwawe ni {lang}. Okukyusa orurimi?\n1. Eyo\n2. Nedda\n0. Emabega"
     }
 }
 
@@ -114,11 +122,15 @@ async def load_session(session_id):
     redis = await get_redis()
     data = await redis.get(session_id)
     if data:
-        parsed = json.loads(data)
-        if not all(key in parsed for key in ["step", "language", "data"]):
-            logger.warning(f"Corrupted session data for {session_id}")
+        try:
+            parsed = json.loads(data)
+            if not all(key in parsed for key in ["step", "language", "data"]):
+                logger.warning(f"Corrupted session data for {session_id}")
+                return None
+            return parsed
+        except json.JSONDecodeError:
+            logger.error(f"Invalid session JSON for {session_id}")
             return None
-        return parsed
     return None
 
 async def delete_session(session_id):
@@ -161,8 +173,6 @@ async def startup():
     redis = await get_redis()
     await FastAPILimiter.init(redis)
 
-
-# USSD Callback Endpoint
 @router.post("/ussd_callback", dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -192,24 +202,29 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
         # Load or initialize session
         session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}, "user_id": user.id if user else None}
+        if not session:
+            logger.error(f"Failed to load or initialize session for {session_id}")
+            return PlainTextResponse(content="END Session error. Please try again.")
+
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
-        # BACK navigation
-        if current_input == "0" and session.get("step") != "consent":
+        # BACK navigation (exclude consent)
+        if current_input == "0" and session.get("step") not in ["consent", "returning_language_option"]:
             back_map = {
                 "select_language": "consent",
                 "register_name": "select_language",
                 "register_district": "register_name",
-                "topic_menu": "register_district",
-                "ask_question": "topic_menu",
-                "returning_language_option": "topic_menu"
+                "topic_menu": "register_district" if not user else "returning_language_option",
+                "ask_question": "topic_menu"
             }
-            session["step"] = back_map.get(session["step"], "consent")
+            session["step"] = back_map.get(session["step"], session["step"])
             step = session["step"]
             response_text = f"CON {PROMPTS.get(step, WELCOME_MSG).get(language, '')}"
             if step == "topic_menu":
                 response_text += format_topics(language)
+            elif step == "returning_language_option":
+                response_text = PROMPTS["returning_language_option"][language].format(lang=language)
             await save_session(session_id, session)
             return PlainTextResponse(content=response_text)
 
@@ -222,9 +237,8 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             session["language"] = language
             session["user_id"] = user.id
             response_text = (
-                f"CON Welcome back {user.first_name}!\n"
-                f"Your current language is {language}.\n"
-                "Do you want to change language?\n1. Yes\n2. No\n0. Back"
+                f"CON Welcome back {user.first_name}!\n" +
+                PROMPTS["returning_language_option"][language].format(lang=language)
             )
             await save_session(session_id, session)
             return PlainTextResponse(content=response_text)
@@ -241,19 +255,20 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
             else:
                 response_text = (
-                    "CON Invalid choice. Do you want to change language?\n1. Yes\n2. No\n0. Back"
+                    f"CON Invalid choice.\n" +
+                    PROMPTS["returning_language_option"][language].format(lang=language)
                 )
             await save_session(session_id, session)
             return PlainTextResponse(content=response_text)
 
         # NEW USER FLOW
         if step == "consent":
-            if not user_response or user_response[-1] != "1":
+            if not user_response or current_input != "1":
                 return PlainTextResponse(content="END You must consent to continue.")
             session["step"] = "select_language"
             response_text = (
                 "CON Please select language:\n"
-                "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro\n0. Back"
+                "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
             )
 
         elif step == "select_language":
@@ -265,8 +280,16 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             else:
                 language = LANGUAGES[current_input]
                 session["language"] = language
-                session["step"] = "register_name"
-                response_text = f"CON {PROMPTS['register_name'][language]}"
+                if user:  # Returning user changing language
+                    user.preferred_language = language
+                    await db.commit()
+                    session["step"] = "topic_menu"
+                    response_text = f"CON Language updated to {language}.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
+                else:
+                    session["step"] = "register_name"
+                    response_text = f"CON {PROMPTS['register_name'][language]}"
+                await save_session(session_id, session)
+                return PlainTextResponse(content=response_text)
 
         elif step == "register_name":
             if not current_input:
@@ -300,7 +323,7 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     new_user = User(
                         first_name=first_name,
                         last_name=last_name,
-                        phone_number=phone_number,  # Encrypt if needed
+                        phone_number=phone_number,
                         district_id=user_data["district"],
                         is_active=True,
                         role=RoleEnum.CITIZEN,
@@ -330,6 +353,10 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             if not question:
                 response_text = f"CON {PROMPTS['question'][language]}"
             else:
+                if not user:
+                    logger.error(f"No user found for session {session_id}")
+                    return PlainTextResponse(content="END Session error. Please start over.")
+
                 # Check for spam or offensive content
                 is_spam, spam_prob = spam_detector.predict_spam(question, language.lower())
                 is_offensive = spam_detector.check_offensive(question, language.lower())
@@ -340,12 +367,12 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     try:
                         msg = Message(
                             sender_id=user.id,
-                            recipient_id=None,  # No recipient for flagged messages
+                            recipient_id=None,
                             content=question,
                             district_id=user.district_id,
                             created_at=datetime.utcnow(),
                             mp_id=None,
-                            is_flagged=True  # Assumes Message model has is_flagged field
+                            is_flagged=True
                         )
                         db.add(msg)
                         await db.commit()
