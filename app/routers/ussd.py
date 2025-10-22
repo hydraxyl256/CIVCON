@@ -22,14 +22,7 @@ africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALK
 sms = africastalking.SMS
 
 # Languages & messages
-LANGUAGES = {
-    "1": "EN",
-    "2": "LG",
-    "3": "RN",
-    "4": "LU",
-    "5": "SW",
-    "6": "RT"
-}
+LANGUAGES = {"1": "EN", "2": "LG", "3": "RN", "4": "LU", "5": "SW", "6": "RT"}
 
 WELCOME_MSG = {
     "EN": "Welcome to CIVCON! Raise civic issues with your MP.",
@@ -42,36 +35,22 @@ WELCOME_MSG = {
 
 PROMPTS = {
     "register_name": {
-        "EN": "Enter your name:",
-        "LG": "Wandika erinnya lyo:",
-        "RN": "Yandikaho erinya ryawe:",
-        "LU": "Ket erina ni:",
-        "SW": "Weka jina lako:",
-        "RT": "Andika erinnya lyo:"
+        "EN": "Enter your name:", "LG": "Wandika erinnya lyo:", "RN": "Yandikaho erinya ryawe:",
+        "LU": "Ket erina ni:", "SW": "Weka jina lako:", "RT": "Andika erinnya lyo:"
     },
     "register_district": {
-        "EN": "Enter your district or constituency:",
-        "LG": "Wandika ekitundu kyo oba disitulikiti:",
-        "RN": "Yandikaho disitulikiti yawe:",
-        "LU": "Ket district ni i:",
-        "SW": "Weka eneo lako au wilaya:",
+        "EN": "Enter your district or constituency:", "LG": "Wandika ekitundu kyo oba disitulikiti:",
+        "RN": "Yandikaho disitulikiti yawe:", "LU": "Ket district ni i:", "SW": "Weka eneo lako au wilaya:",
         "RT": "Andika district yo:"
     },
     "ask_topic": {
-        "EN": "Select topic:\n",
-        "LG": "Londa ekitundu:\n",
-        "RN": "Hitamo ekitundu:\n",
-        "LU": "Londo topic:\n",
-        "SW": "Chagua mada:\n",
-        "RT": "Londa ekitundu:\n"
+        "EN": "Select topic:\n", "LG": "Londa ekitundu:\n", "RN": "Hitamo ekitundu:\n",
+        "LU": "Londo topic:\n", "SW": "Chagua mada:\n", "RT": "Londa ekitundu:\n"
     },
     "question": {
-        "EN": "Enter your question (max 160 chars):",
-        "LG": "Wandika ekibuuzo kyo (obutayinza kusukka ku 160):",
-        "RN": "Yandikaho ekibuuzo kyawe (kitarenga 160):",
-        "LU": "Ket penyo ni (160 ki neno):",
-        "SW": "Weka swali lako (si zaidi ya herufi 160):",
-        "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160):"
+        "EN": "Enter your question (max 160 chars):", "LG": "Wandika ekibuuzo kyo (obutayinza kusukka ku 160):",
+        "RN": "Yandikaho ekibuuzo kyawe (kitarenga 160):", "LU": "Ket penyo ni (160 ki neno):",
+        "SW": "Weka swali lako (si zaidi ya herufi 160):", "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160):"
     }
 }
 
@@ -81,7 +60,7 @@ TOPICS = {
     "RN": ["Oburamu", "Eby'enjigiriza", "Enzira", "Amaizi", "Amashanyarazi"],
     "LU": ["Rwom", "Kweko", "Yo ka", "Pi", "Teko"],
     "SW": ["Afya", "Elimu", "Barabara", "Maji", "Umeme"],
-    "RT": ["Oburamu", "Eby'enjigiriza", "Enzira", "Amaizi", "Amashanyarazi"]
+    "RT": ["Oburamu", "Eby'enjigiriza", "Enzira", "Amaizi", "Amashanyarazi"],
 }
 
 def format_topics(lang):
@@ -118,15 +97,13 @@ async def get_mps(db: AsyncSession):
         return [MP(**m) for m in json.loads(cached)]
     result = await db.execute(select(MP))
     mps = result.scalars().all()
-    await redis.set("all_mps", json.dumps([{
-        "id": m.id,
-        "user_id": m.user_id,
-        "district_id": m.district_id,
-        "phone_number": m.phone_number
-    } for m in mps]), ex=1800)
+    await redis.set(
+        "all_mps",
+        json.dumps([{"id": m.id, "user_id": m.user_id, "district_id": m.district_id, "phone_number": m.phone_number} for m in mps]),
+        ex=1800
+    )
     return mps
 
-# USSD callback
 @router.post("/ussd_callback")
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -139,19 +116,27 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         text = data.get("text", "").strip()
         user_response = text.split("*") if text else []
 
-        logger.info(f"USSD request: {data}")
+        # Load user
+        result = await db.execute(select(User).where(User.phone_number == phone_number))
+        user = result.scalars().first()
 
-        session = await load_session(session_id)
-        if not session:
-            session = {"step": "consent", "language": "EN", "data": {}}
-            await save_session(session_id, session)
-            return PlainTextResponse(content=f"CON {WELCOME_MSG['EN']}\nDo you consent?\n1. Yes\n0. No")
-
-        step = session.get("step", "consent")
+        # Load or initialize session
+        session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}}
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
-        # CONSENT
+        # Returning user: skip registration
+        if user and session["step"] == "consent":
+            session["step"] = "topic_menu"
+            session["language"] = user.preferred_language or "EN"
+            language = session["language"]
+            response_text = f"CON Welcome back {user.first_name}! {PROMPTS['ask_topic'][language]}{format_topics(language)}"
+            await save_session(session_id, session)
+            return PlainTextResponse(content=response_text)
+
+        step = session.get("step", "consent")
+
+        # NEW USER FLOW
         if step == "consent":
             if not user_response or user_response[-1] != "1":
                 return PlainTextResponse(content="END You must consent to continue.")
@@ -161,7 +146,6 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
             )
 
-        # LANGUAGE
         elif step == "select_language":
             choice = user_response[-1] if user_response else None
             if not choice or choice not in LANGUAGES:
@@ -175,7 +159,6 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 session["step"] = "register_name"
                 response_text = f"CON {PROMPTS['register_name'][language]}"
 
-        # REGISTER NAME
         elif step == "register_name":
             current_input = user_response[-1] if user_response else None
             if not current_input:
@@ -186,7 +169,6 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 session["step"] = "register_district"
                 response_text = f"CON {PROMPTS['register_district'][language]}"
 
-        # REGISTER DISTRICT
         elif step == "register_district":
             current_input = user_response[-1] if user_response else None
             if not current_input:
@@ -195,10 +177,8 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 user_data["district"] = current_input.title()
                 session["data"] = user_data
 
-                # Check if user exists
-                result = await db.execute(select(User).where(User.phone_number == phone_number))
-                user = result.scalars().first()
                 if not user:
+                    # Create new user
                     names = user_data["name"].split()
                     first_name = names[0]
                     last_name = names[-1] if len(names) > 1 else ""
@@ -215,29 +195,22 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     await db.commit()
                     await db.refresh(new_user)
                     user = new_user
+
                 session["step"] = "topic_menu"
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
 
-        # TOPIC
+        # TOPIC MENU
         elif step == "topic_menu":
             current_input = user_response[-1] if user_response else None
-            result = await db.execute(select(User).where(User.phone_number == phone_number))
-            user = result.scalars().first()
-            if not user:
-                session["step"] = "consent"
-                response_text = f"CON {WELCOME_MSG['EN']}\nDo you consent?\n1. Yes\n0. No"
+            if not current_input:
+                response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
+            elif current_input.isdigit() and 1 <= int(current_input) <= len(TOPICS[language]):
+                user_data["topic"] = TOPICS[language][int(current_input) - 1]
+                session["data"] = user_data
+                session["step"] = "ask_question"
+                response_text = f"CON {PROMPTS['question'][language]}"
             else:
-                language = user.preferred_language or language
-                session["language"] = language
-                if not current_input:
-                    response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
-                elif current_input.isdigit() and 1 <= int(current_input) <= len(TOPICS[language]):
-                    user_data["topic"] = TOPICS[language][int(current_input) - 1]
-                    session["data"] = user_data
-                    session["step"] = "ask_question"
-                    response_text = f"CON {PROMPTS['question'][language]}"
-                else:
-                    response_text = f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
+                response_text = f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
 
         # ASK QUESTION
         elif step == "ask_question":
@@ -245,35 +218,19 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             if not question:
                 response_text = f"CON {PROMPTS['question'][language]}"
             else:
-                # Fetch user
-                result = await db.execute(select(User).where(User.phone_number == phone_number))
-                user = result.scalars().first()
-                if not user:
-                    response_text = "END Session expired. Please try again."
-                    await delete_session(session_id)
-                    return PlainTextResponse(content=response_text)
-
-                # Get MPs
                 mps = await get_mps(db)
                 user_district = (user.district_id or "").lower().replace("district", "").strip()
                 mp = next(
-                    (
-                        m for m in mps
-                        if user_district in (m.district_id or "").lower().replace("district", "").strip()
-                        or (m.district_id or "").lower().replace("district", "").strip() in user_district
-                    ),
+                    (m for m in mps if user_district in (m.district_id or "").lower().replace("district", "").strip() or
+                     (m.district_id or "").lower().replace("district", "").strip() in user_district),
                     None
                 )
-
-                # CIVCON fallback
                 fallback_phone = "+256784437652"
-                fallback_mp_id = 15  # ADMIN fallback MP ID
-
-                # Determine recipient
+                fallback_mp_id = 15
                 recipient_id = mp.user_id if mp else fallback_mp_id
                 recipient_phone = mp.phone_number if mp else fallback_phone
 
-                # Save message safely
+                # Save message
                 try:
                     msg = Message(
                         sender_id=user.id,
@@ -288,45 +245,29 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 except Exception as e:
                     logger.error(f"Failed to save message: {e}")
                     await db.rollback()
-                    response_text = "END Sorry, something went wrong saving your message. Please try again later."
-                    return PlainTextResponse(content=response_text)
+                    return PlainTextResponse(content="END Something went wrong saving your message.")
 
-                # Send SMS with phone normalization
+                # Send SMS
                 try:
                     normalized_recipient = normalize_phone_number(recipient_phone)
                     if not normalized_recipient.startswith("+256"):
                         normalized_recipient = "+256" + normalized_recipient.lstrip("0")
-
-                    sms_message = (
-                        f"CIVCON ALERT:\n"
-                        f"New issue from {user.first_name or 'Citizen'} ({user.phone_number}).\n\n"
-                        f"Message: {question}\n"
-                        f"District: {user_district.capitalize()}"
-                    )
+                    sms_message = f"CIVCON ALERT:\nNew issue from {user.first_name} ({user.phone_number}).\n\nMessage: {question}\nDistrict: {user_district.capitalize()}"
                     await send_sms_async(phone=normalized_recipient, message=sms_message)
                     response_text = "END Thank you! Your message has been sent successfully to your MP."
                 except Exception as e:
                     logger.error(f"SMS send failed: {e}")
-                    response_text = (
-                        "END Message saved but SMS failed to send. "
-                        "Our team will ensure it reaches your MP."
-                    )
+                    response_text = "END Message saved but SMS failed to send."
 
-                # Clear session
                 await delete_session(session_id)
                 return PlainTextResponse(content=response_text)
 
-        else:
-            response_text = "END Invalid session state. Please try again."
-            await delete_session(session_id)
-
-        # Save session if not ending
+        # Save session
         session["data"] = user_data
         await save_session(session_id, session)
         return PlainTextResponse(content=response_text)
 
     except Exception as e:
         logger.error(f"USSD callback error: {e}", exc_info=True)
-        await db.rollback()
         await delete_session(session_id)
-        return PlainTextResponse(content="END Sorry, something went wrong. Please try again shortly.")
+        return PlainTextResponse(content="END Something went wrong. Please try again shortly.")
