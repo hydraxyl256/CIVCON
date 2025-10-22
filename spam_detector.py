@@ -8,133 +8,165 @@ from sklearn.pipeline import Pipeline
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-from nltk.stem import SnowballStemmer
 import logging
+from prometheus_client import Counter
 
+# Setup logging
 logger = logging.getLogger("app.spam_detector")
 
-# NLTK setup
-nltk.download('stopwords', quiet=True)
-nltk.download('punkt', quiet=True)
+# Metrics
+spam_detections = Counter('spam_detections_total', 'Total spam detections')
+offensive_detections = Counter('offensive_detections_total', 'Total offensive content detections')
 
-# Custom stopwords for supported languages
-CUSTOM_STOPWORDS = {
-    "en": set(stopwords.words('english')),
-    "lg": {"ne", "mu", "ku"},  # Luganda
-    "rn": {"na", "mu", "kuri"},  # Runyankore
-    "lu": {"ka", "pi", "gi"},  # Lango
-    "sw": {"na", "kwa", "ya"},  # Swahili
-    "rt": {"na", "mu", "ku"}  # Rutooro
-}
+# Download NLTK resources
+try:
+    nltk.download('punkt_tab', quiet=True)
+    nltk.download('stopwords', quiet=True)
+except Exception as e:
+    logger.error(f"Failed to download NLTK resources: {e}")
 
-# Offensive words (extend as needed)
+# Expanded offensive words list (extend further for production)
 OFFENSIVE_WORDS = {
-    "en": ["damn", "shit", "fuck", "bitch"],
-    "lg": ["kibadde", "buwereza"],
-    "rn": ["bubi", "okubina"],  # Runyankore
-    "lu": ["manya", "lonyo"],  # Lango
-    "sw": ["vitu vibaya", "kamwaga"],  # Swahili
-    "rt": ["bubi", "buru"]  # Rutooro
+    "en": ["damn", "shit", "fuck", "bitch", "idiot", "stupid"],
+    "lg": ["kibadde", "buwereza", "mufu"],
+    "rn": ["bubi", "okubina", "murima"],
+    "lu": ["manya", "lonyo", "rac"],
+    "sw": ["vitu vibaya", "kamwaga", "mjinga"],
+    "rt": ["bubi", "buru", "mufu"]
 }
 
 class SpamDetector:
-    def __init__(self):
-        self.model_path = "spam_model.pkl"
-        self.pipeline: Pipeline = None
+    def __init__(self, model_path="spam_model"):
+        self.model_path = model_path
+        self.pipelines = {}  # Store pipelines per language
         self.is_loaded = False
-        self.stemmer = SnowballStemmer("english")
-        self._load_model()
+        self.stop_words = {
+            "en": set(stopwords.words('english')) if 'english' in stopwords.fileids() else set(),
+            "lg": set(),  # Add Luganda stopwords if available
+            "rn": set(),  # Add Runyankore stopwords
+            "lu": set(),  # Add Lango stopwords
+            "sw": set(),  # Add Swahili stopwords
+            "rt": set()   # Add Rutooro stopwords
+        }
+        self._load_or_train_model()
 
-    def _load_model(self):
-        """Load model from disk or train a new one if not found."""
-        if os.path.exists(self.model_path):
-            try:
-                with open(self.model_path, 'rb') as f:
-                    self.pipeline = pickle.load(f)
-                self.is_loaded = True
-                logger.info("Spam detection model loaded successfully.")
-            except Exception as e:
-                logger.error(f"Failed to load model: {e}. Training a new model.")
-                self._train_model()
-        else:
-            logger.warning("Model not found. Training a new model.")
-            self._train_model()
+    def _load_or_train_model(self):
+        """Load or train models for each language."""
+        for lang in OFFENSIVE_WORDS.keys():
+            model_file = f"{self.model_path}_{lang}.pkl"
+            if os.path.exists(model_file):
+                try:
+                    with open(model_file, 'rb') as f:
+                        self.pipelines[lang] = pickle.load(f)
+                    logger.info(f"Loaded spam model for {lang}")
+                except Exception as e:
+                    logger.error(f"Failed to load model for {lang}: {e}")
+                    self._train_model(lang)
+            else:
+                self._train_model(lang)
+        self.is_loaded = bool(self.pipelines)
 
-    def _train_model(self):
-        """Train a spam detection model with expanded multilingual data."""
-        sms_data = [
-            ("Free entry in 2 a wkly comp to win FA Cup final tkts...", "spam"),
-            ("K..give me a sec... I'll call u right now..", "ham"),
-            ("Ok i will come soon", "ham"),
-            ("URGENT! You won a £1000 prize ...", "spam"),
-            ("Congrats! 1 year special cinema ticket for 2 is yours.", "spam"),
-            ("Hello my love, what are you doing? I miss you.", "ham"),
-            ("Your free ringtone is waiting. Call 08702344776 now!", "spam"),
-            ("I love you too! Can't wait to see you.", "ham"),
-            ("Wandika ekibuuzo kyo bubi!", "spam"),  # Luganda offensive
-            ("Karibu! Toa hoja yako kwa mbunge.", "ham"),  # Swahili normal
-            ("Bitch, fix the roads!", "spam"),  # English offensive
-            ("Amazzi ga bubi mu district!", "spam")  # Rutooro offensive
-        ]
+    def _train_model(self, lang: str):
+        """Train a spam detection model for a specific language."""
+        sms_data = {
+            "en": [
+                ("Free entry to win a prize!", "spam"),
+                ("Hello, how are you?", "ham"),
+                ("You are a stupid MP!", "spam"),
+                ("We need better roads in Kampala", "ham"),
+                ("URGENT! Claim your reward!", "spam"),
+                ("Please fix the water issue", "ham")
+            ],
+            "lg": [
+                ("Wandika obuzibu bwo!", "ham"),
+                ("Mufu! Okuva ewa MP!", "spam"),
+                ("Amazzi ga wano gali mabi", "ham")
+            ],
+            "rn": [
+                ("Okwanjwa ku buzibu!", "ham"),
+                ("Murima! MP wange!", "spam"),
+                ("Amaizi g'okuzibu", "ham")
+            ],
+            "lu": [
+                ("Wek ayie gi MP!", "ham"),
+                ("Rac! MP mamegi!", "spam"),
+                ("Pi peke i gang", "ham")
+            ],
+            "sw": [
+                ("Toa hoja zako!", "ham"),
+                ("Mjinga! Mbunge wako!", "spam"),
+                ("Maji hayatoshi hapa", "ham")
+            ],
+            "rt": [
+                ("Andika ebizibu byo!", "ham"),
+                ("Buru! MP wange!", "spam"),
+                ("Amaizi g'okuzibu", "ham")
+            ]
+        }
 
+        data = sms_data.get(lang, sms_data["en"])
         X, y = [], []
-        for msg, label in sms_data:
-            X.append(self.preprocess_text(msg, language="en"))  # Adjust language dynamically
+        for msg, label in data:
+            X.append(msg)
             y.append(1 if label.lower() == 'spam' else 0)
 
         if not X or not y:
-            logger.error("No valid training data found.")
-            self.pipeline = None
-            self.is_loaded = False
+            logger.warning(f"No training data for {lang}. Using default.")
+            self.pipelines[lang] = None
             return
 
-        self.pipeline = Pipeline([
-            ('tfidf', TfidfVectorizer(max_features=1000)),
+        pipeline = Pipeline([
+            ('tfidf', TfidfVectorizer(max_features=1000, stop_words=self.stop_words.get(lang, set()))),
             ('clf', LogisticRegression())
         ])
-        self.pipeline.fit(X, y)
-
         try:
-            with open(self.model_path, 'wb') as f:
-                pickle.dump(self.pipeline, f)
-            self.is_loaded = True
-            logger.info("Spam detection model trained and saved.")
+            pipeline.fit(X, y)
+            with open(f"{self.model_path}_{lang}.pkl", 'wb') as f:
+                pickle.dump(pipeline, f)
+            self.pipelines[lang] = pipeline
+            logger.info(f"Trained and saved spam model for {lang}")
         except Exception as e:
-            logger.error(f"Failed to save model: {e}")
+            logger.error(f"Failed to train or save model for {lang}: {e}")
+            self.pipelines[lang] = None
 
-    def preprocess_text(self, text: str, language: str = "en") -> str:
+    def preprocess_text(self, text: str, lang: str) -> str:
         """Preprocess text for spam/offensive detection."""
-        text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^\w\s]', '', text)
-        tokens = word_tokenize(text.lower())
-        stop_words = CUSTOM_STOPWORDS.get(language, set())
-        tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
-        return ' '.join(tokens)
+        try:
+            text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+            text = re.sub(r'\s+', ' ', text)
+            text = re.sub(r'[^\w\s]', '', text)
+            tokens = word_tokenize(text.lower())
+            stop_words = self.stop_words.get(lang, set())
+            tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
+            return ' '.join(tokens)
+        except Exception as e:
+            logger.error(f"Text preprocessing failed: {e}")
+            return text.lower()  # Fallback to basic preprocessing
 
-    def predict_spam(self, text: str, language: str = "en") -> Tuple[bool, float]:
+    def predict_spam(self, text: str, lang: str = "en") -> Tuple[bool, float]:
         """Predict if text is spam. Returns (is_spam, probability)."""
-        if not self.is_loaded or not self.pipeline:
-            logger.warning("Model not loaded. Returning default 'not spam'.")
+        if not self.is_loaded or not self.pipelines.get(lang):
+            logger.warning(f"No model for {lang}. Returning default 'not spam'.")
             return False, 0.0
 
-        processed_text = self.preprocess_text(text, language)
+        processed_text = self.preprocess_text(text, lang)
         try:
-            prediction = self.pipeline.predict([processed_text])[0]
-            probability = self.pipeline.predict_proba([processed_text])[0][1]
+            pipeline = self.pipelines[lang]
+            prediction = pipeline.predict([processed_text])[0]
+            probability = pipeline.predict_proba([processed_text])[0][1]
+            if prediction == 1:
+                spam_detections.inc()
             return prediction == 1, probability
         except Exception as e:
-            logger.error(f"Prediction failed: {e}")
+            logger.error(f"Prediction failed for {lang}: {e}")
             return False, 0.0
 
-    def check_offensive(self, text: str, language: str = "en") -> bool:
+    def check_offensive(self, text: str, lang: str = "en") -> bool:
         """Check if text contains offensive words for the given language."""
         text_lower = text.lower()
-        offensive_list = OFFENSIVE_WORDS.get(language, OFFENSIVE_WORDS["en"])
-        if language == "en":
-            stemmed_text = " ".join(self.stemmer.stem(word) for word in text_lower.split())
-            return any(self.stemmer.stem(word) in stemmed_text for word in offensive_list)
-        return any(word in text_lower for word in offensive_list)
-
-# Global detector instance
-detector = SpamDetector()
+        offensive_list = OFFENSIVE_WORDS.get(lang.lower(), OFFENSIVE_WORDS["en"])
+        is_offensive = any(word in text_lower for word in offensive_list)
+        if is_offensive:
+            offensive_detections.inc()
+            logger.warning(f"Offensive content detected in {lang}: {text}")
+        return is_offensive

@@ -80,12 +80,12 @@ PROMPTS = {
         "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160, tewali bigambo by'okuzirira):"
     },
     "returning_language_option": {
-        "EN": "Your current language is {lang}. Change language?\n1. Yes\n2. No\n0. Back",
-        "LG": "Lugambo lwo lwa {lang}. Okukyusa lugambo?\n1. Ye\n2. Nedda\n0. Emabega",
-        "RN": "Ururimi rwawe ni {lang}. Okurihindura?\n1. Yego\n2. Oya\n0. Inyuma",
-        "LU": "Lok ma itiyo kede ni {lang}. Bedo adwong?\n1. Eyo\n2. Pe\n0. Cen",
-        "SW": "Lugha yako ya sasa ni {lang}. Badilisha lugha?\n1. Ndio\n2. Hapana\n0. Rudi",
-        "RT": "Orurimi rwawe ni {lang}. Okukyusa orurimi?\n1. Eyo\n2. Nedda\n0. Emabega"
+        "EN": "Your current language is {lang}. Change language?\n1. Yes\n2. No",
+        "LG": "Lugambo lwo lwa {lang}. Okukyusa lugambo?\n1. Ye\n2. Nedda",
+        "RN": "Ururimi rwawe ni {lang}. Okurihindura?\n1. Yego\n2. Oya",
+        "LU": "Lok ma itiyo kede ni {lang}. Bedo adwong?\n1. Eyo\n2. Pe",
+        "SW": "Lugha yako ya sasa ni {lang}. Badilisha lugha?\n1. Ndio\n2. Hapana",
+        "RT": "Orurimi rwawe ni {lang}. Okukyusa orurimi?\n1. Eyo\n2. Nedda"
     }
 }
 
@@ -204,12 +204,12 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}, "user_id": user.id if user else None}
         if not session:
             logger.error(f"Failed to load or initialize session for {session_id}")
-            return PlainTextResponse(content="END Session error. Please try again.")
+            return PlainTextResponse(content="END Session expired. Please start over.")
 
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
-        # BACK navigation (exclude consent)
+        # BACK navigation (exclude consent and returning_language_option)
         if current_input == "0" and session.get("step") not in ["consent", "returning_language_option"]:
             back_map = {
                 "select_language": "consent",
@@ -255,7 +255,7 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
             else:
                 response_text = (
-                    f"CON Invalid choice.\n" +
+                    f"CON Invalid choice. Please select 1 or 2.\n" +
                     PROMPTS["returning_language_option"][language].format(lang=language)
                 )
             await save_session(session_id, session)
@@ -358,8 +358,13 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     return PlainTextResponse(content="END Session error. Please start over.")
 
                 # Check for spam or offensive content
-                is_spam, spam_prob = spam_detector.predict_spam(question, language.lower())
-                is_offensive = spam_detector.check_offensive(question, language.lower())
+                try:
+                    is_spam, spam_prob = spam_detector.predict_spam(question, language.lower())
+                    is_offensive = spam_detector.check_offensive(question, language.lower())
+                except Exception as e:
+                    logger.error(f"Spam detection failed: {e}")
+                    is_spam, is_offensive = False, False  # Fallback to allow message
+
                 if is_spam or is_offensive:
                     message_flagged.inc()
                     logger.warning(f"Flagged message from {phone_number}: spam={is_spam}, offensive={is_offensive}, text={question}")
