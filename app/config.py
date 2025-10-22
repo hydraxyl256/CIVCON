@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     session_secret_key: str
     frontend_url: str = "https://civ-con-sh2j.vercel.app/"  
     backend_url: str = "https://civcon.onrender.com/"
+    FALLBACK_PHONE: str = "+256784437652"
+    FALLBACK_MP_ID: int = 15
 
     
 

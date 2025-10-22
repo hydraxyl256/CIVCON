@@ -23,6 +23,10 @@ NLTK_DATA_PATH = os.environ.get('NLTK_DATA_PATH', '/opt/render/nltk_data')
 nltk.data.path.append(NLTK_DATA_PATH)
 os.makedirs(NLTK_DATA_PATH, exist_ok=True)
 
+# Ensure model directory is writable
+MODEL_DIR = os.environ.get('MODEL_DIR', '/opt/render/project/src/models')
+os.makedirs(MODEL_DIR, exist_ok=True)
+
 # Download NLTK resources (called at build time)
 def download_nltk_resources():
     """Download NLTK resources. Call this at build time."""
@@ -44,7 +48,7 @@ OFFENSIVE_WORDS = {
 }
 
 class SpamDetector:
-    def __init__(self, model_path="spam_model"):
+    def __init__(self, model_path=os.path.join(MODEL_DIR, "spam_model")):
         self.model_path = model_path
         self.pipelines = {}  # Store pipelines per language
         self.is_loaded = False
@@ -70,15 +74,16 @@ class SpamDetector:
         """Load or train models for each language."""
         for lang in OFFENSIVE_WORDS.keys():
             model_file = f"{self.model_path}_{lang}.pkl"
-            if os.path.exists(model_file):
-                try:
+            try:
+                if os.path.exists(model_file):
                     with open(model_file, 'rb') as f:
                         self.pipelines[lang] = pickle.load(f)
-                    logger.info(f"Loaded spam model for {lang}")
-                except Exception as e:
-                    logger.error(f"Failed to load model for {lang}: {e}")
+                    logger.info(f"Loaded spam model for {lang} from {model_file}")
+                else:
+                    logger.info(f"No model file found for {lang} at {model_file}. Training new model.")
                     self._train_model(lang)
-            else:
+            except Exception as e:
+                logger.error(f"Failed to load model for {lang} from {model_file}: {e}")
                 self._train_model(lang)
         self.is_loaded = bool(self.pipelines)
 
@@ -127,7 +132,7 @@ class SpamDetector:
             y.append(1 if label.lower() == 'spam' else 0)
 
         if not X or not y:
-            logger.warning(f"No training data for {lang}. Using default.")
+            logger.warning(f"No training data for {lang}. Skipping model training.")
             self.pipelines[lang] = None
             return
 
@@ -137,10 +142,11 @@ class SpamDetector:
         ])
         try:
             pipeline.fit(X, y)
-            with open(f"{self.model_path}_{lang}.pkl", 'wb') as f:
+            model_file = f"{self.model_path}_{lang}.pkl"
+            with open(model_file, 'wb') as f:
                 pickle.dump(pipeline, f)
             self.pipelines[lang] = pipeline
-            logger.info(f"Trained and saved spam model for {lang}")
+            logger.info(f"Trained and saved spam model for {lang} to {model_file}")
         except Exception as e:
             logger.error(f"Failed to train or save model for {lang}: {e}")
             self.pipelines[lang] = None
@@ -195,4 +201,3 @@ class SpamDetector:
             offensive_detections.inc()
             logger.warning(f"Offensive content detected in {lang}: {text}")
         return is_offensive
-    
