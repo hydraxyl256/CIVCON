@@ -9,7 +9,7 @@ from app.models import User, Message, MP
 from app.schemas import Role as RoleEnum
 from app.redis_client import get_redis
 from app.config import settings
-from app.spam_detector import SpamDetector
+from app.spam_detector import SpamDetector, download_nltk_resources
 import africastalking
 import asyncio
 import json
@@ -31,7 +31,7 @@ message_flagged = Counter('message_flagged_total', 'Total flagged messages')
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
-# Initialize spam detector
+# Initialize spam detector (after NLTK resources are downloaded)
 spam_detector = SpamDetector()
 
 # Languages & messages

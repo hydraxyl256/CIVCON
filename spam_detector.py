@@ -23,7 +23,7 @@ NLTK_DATA_PATH = os.environ.get('NLTK_DATA_PATH', '/opt/render/nltk_data')
 nltk.data.path.append(NLTK_DATA_PATH)
 os.makedirs(NLTK_DATA_PATH, exist_ok=True)
 
-# Download NLTK resources (this will be called at build time via script)
+# Download NLTK resources (called at build time)
 def download_nltk_resources():
     """Download NLTK resources. Call this at build time."""
     try:
@@ -182,6 +182,3 @@ class SpamDetector:
             offensive_detections.inc()
             logger.warning(f"Offensive content detected in {lang}: {text}")
         return is_offensive
-
-# Global detector instance (downloads happen at build time)
-detector = SpamDetector()
