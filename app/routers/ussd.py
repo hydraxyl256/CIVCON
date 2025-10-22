@@ -1,11 +1,8 @@
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
-from fastapi_limiter import FastAPILimiter
-from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
-from redis.exceptions import RedisError
 from datetime import datetime
 from app.database import get_db
 from app.models import User, Message, MP
@@ -17,47 +14,25 @@ import africastalking
 import asyncio
 import json
 import logging
+import re
 from app.utils.phone_utils import normalize_phone_number
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
+from prometheus_client import Counter
 
 router = APIRouter(prefix="/ussd", tags=["USSD"])
 logger = logging.getLogger("app.routers.ussd")
-detector = SpamDetector()
+
+# Metrics
+ussd_requests = Counter('ussd_requests_total', 'Total USSD requests')
+message_flagged = Counter('message_flagged_total', 'Total flagged messages')
 
 # Initialize Africa's Talking
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
-# Initialize rate limiter
-@router.on_event("startup")
-async def startup():
-    redis = await get_redis()
-    await FastAPILimiter.init(redis)
-
-# Dynamic rate limiter based on phone number and user status
-async def dynamic_rate_limiter(request: Request, db: AsyncSession = Depends(get_db)):
-    phone_number = normalize_phone_number(request.get("phoneNumber", ""))
-    if not phone_number:
-        raise HTTPException(status_code=400, detail="Phone number not provided")
-
-    # Default limits
-    times = 10  # Standard: 10 requests per minute
-    seconds = 60
-
-    # Check if user exists
-    result = await db.execute(select(User).where(User.phone_number == phone_number))
-    user = result.scalars().first()
-
-    if not user:
-        # New user: stricter limit
-        times = 5
-    else:
-        # Check for flagged messages
-        result = await db.execute(select(Message).where(Message.sender_id == user.id, Message.flagged == True))
-        flagged_count = len(result.scalars().all())
-        if flagged_count >= 1:
-            times = 3  # Stricter limit for users with flagged messages
-
-    return RateLimiter(times=times, seconds=seconds, identifier=phone_number)
+# Initialize spam detector
+spam_detector = SpamDetector()
 
 # Languages & messages
 LANGUAGES = {"1": "EN", "2": "LG", "3": "RN", "4": "LU", "5": "SW", "6": "RT"}
@@ -73,22 +48,36 @@ WELCOME_MSG = {
 
 PROMPTS = {
     "register_name": {
-        "EN": "Enter your name:", "LG": "Wandika erinnya lyo:", "RN": "Yandikaho erinya ryawe:",
-        "LU": "Ket erina ni:", "SW": "Weka jina lako:", "RT": "Andika erinnya lyo:"
+        "EN": "Enter your name (letters only):",
+        "LG": "Wandika erinnya lyo (obukuumi bupya):",
+        "RN": "Yandikaho erinya ryawe (obukuumi bupya):",
+        "LU": "Ket erina ni (litere kende):",
+        "SW": "Weka jina lako (herufi pekee):",
+        "RT": "Andika erinnya lyo (obukuumi bupya):"
     },
     "register_district": {
-        "EN": "Enter your district or constituency:", "LG": "Wandika ekitundu kyo oba disitulikiti:",
-        "RN": "Yandikaho disitulikiti yawe:", "LU": "Ket district ni i:", "SW": "Weka eneo lako au wilaya:",
-        "RT": "Andika district yo:"
+        "EN": "Enter your district (e.g., Kampala):",
+        "LG": "Wandika ekitundu kyo (oku nkola, Kampala):",
+        "RN": "Yandikaho disitulikiti yawe (oku nkola, Kampala):",
+        "LU": "Ket district ni i (ngeo, Kampala):",
+        "SW": "Weka eneo lako (k.m., Kampala):",
+        "RT": "Andika district yo (oku nkola, Kampala):"
     },
     "ask_topic": {
-        "EN": "Select topic:\n", "LG": "Londa ekitundu:\n", "RN": "Hitamo ekitundu:\n",
-        "LU": "Londo topic:\n", "SW": "Chagua mada:\n", "RT": "Londa ekitundu:\n"
+        "EN": "Select topic:\n0. Back",
+        "LG": "Londa ekitundu:\n0. Emabega",
+        "RN": "Hitamo ekitundu:\n0. Inyuma",
+        "LU": "Londo topic:\n0. Cen",
+        "SW": "Chagua mada:\n0. Rudi",
+        "RT": "Londa ekitundu:\n0. Emabega"
     },
     "question": {
-        "EN": "Enter your question (max 160 chars):", "LG": "Wandika ekibuuzo kyo (obutayinza kusukka ku 160):",
-        "RN": "Yandikaho ekibuuzo kyawe (kitarenga 160):", "LU": "Ket penyo ni (160 ki neno):",
-        "SW": "Weka swali lako (si zaidi ya herufi 160):", "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160):"
+        "EN": "Enter your question (max 160 chars, no offensive words):",
+        "LG": "Wandika ekibuuzo kyo (obutayinza kusukka ku 160, tewali bigambo by'okuzirira):",
+        "RN": "Yandikaho ekibuuzo kyawe (kitarenga 160, nta bigambo by'okuzirira):",
+        "LU": "Ket penyo ni (160 ki neno, peki lok marac):",
+        "SW": "Weka swali lako (si zaidi ya herufi 160, hakuna maneno ya matusi):",
+        "RT": "Andika ekibuuzo kyo (obutayinza kusukka ku 160, tewali bigambo by'okuzirira):"
     }
 }
 
@@ -103,6 +92,18 @@ TOPICS = {
 
 def format_topics(lang):
     return "\n".join([f"{i+1}. {topic}" for i, topic in enumerate(TOPICS[lang])])
+
+# Input validation
+def validate_name(name: str) -> bool:
+    return bool(name.strip() and re.match(r'^[A-Za-z\s]+$', name.strip()))
+
+async def validate_district(db: AsyncSession, district: str) -> bool:
+    result = await db.execute(select(MP.district_id).distinct())
+    valid_districts = {d.lower().replace("district", "").strip() for d in result.scalars().all()}
+    return district.lower().replace("district", "").strip() in valid_districts
+
+def sanitize_input(text: str) -> str:
+    return re.sub(r'[<>]', '', text.strip())[:160]
 
 # Redis helpers
 async def save_session(session_id, data, expire=900):
@@ -126,12 +127,18 @@ async def delete_session(session_id):
 
 # Async SMS sender
 async def send_sms_async(phone: str, message: str):
+    from tenacity import retry, stop_after_attempt, wait_exponential
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def send_sms_sync(phone: str, message: str):
+        sms.send(message=message, recipients=[phone])
+
     try:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: sms.send(message=message, recipients=[phone]))
+        await loop.run_in_executor(None, lambda: send_sms_sync(phone, message))
         logger.info(f"SMS sent to {phone}")
     except Exception as e:
-        logger.error(f"Failed to send SMS: {e}")
+        logger.error(f"Failed to send SMS after retries: {e}")
+        raise
 
 # Fetch MPs (cached)
 async def get_mps(db: AsyncSession):
@@ -148,18 +155,30 @@ async def get_mps(db: AsyncSession):
     )
     return mps
 
-# Check for excessive flagged messages
-async def check_user_flags(db: AsyncSession, user_id: int) -> bool:
-    result = await db.execute(select(Message).where(Message.sender_id == user_id, Message.flagged == True))
-    flagged_count = len(result.scalars().all())
-    return flagged_count >= 3  # Block after 3 flagged messages
+# Rate limiting setup
+@router.on_event("startup")
+async def startup():
+    redis = await get_redis()
+    await FastAPILimiter.init(redis)
 
-@router.post("/ussd_callback", dependencies=[Depends(dynamic_rate_limiter)])
+
+# USSD Callback Endpoint
+@router.post("/ussd_callback", dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
+        ussd_requests.inc()
         content_type = request.headers.get("content-type", "")
         data = await (request.json() if "application/json" in content_type else request.form())
         data = dict(data)
+
+        # Redact sensitive data for logging
+        def redact_sensitive(data: dict) -> dict:
+            safe_data = data.copy()
+            if "phoneNumber" in safe_data:
+                safe_data["phoneNumber"] = "REDACTED"
+            return safe_data
+
+        logger.info(f"USSD request: {redact_sensitive(data)}")
 
         session_id = data.get("sessionId")
         phone_number = normalize_phone_number(data.get("phoneNumber"))
@@ -167,21 +186,12 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         user_response = text.split("*") if text else []
         current_input = user_response[-1] if user_response else None
 
-        # Redact sensitive data for logging
-        logger.info(f"USSD request: {redact_sensitive(data)}")
-
         # Load user
         result = await db.execute(select(User).where(User.phone_number == phone_number))
         user = result.scalars().first()
 
-        # Check if user is blocked due to flagged messages
-        if user and await check_user_flags(db, user.id):
-            response_text = "END Your account is blocked due to repeated inappropriate messages."
-            await delete_session(session_id)
-            return PlainTextResponse(content=response_text)
-
         # Load or initialize session
-        session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}}
+        session = await load_session(session_id) or {"step": "consent", "language": "EN", "data": {}, "user_id": user.id if user else None}
         language = session.get("language", "EN")
         user_data = session.get("data", {})
 
@@ -210,10 +220,11 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             session["step"] = "returning_language_option"
             language = user.preferred_language or "EN"
             session["language"] = language
+            session["user_id"] = user.id
             response_text = (
                 f"CON Welcome back {user.first_name}!\n"
                 f"Your current language is {language}.\n"
-                "Do you want to change language?\n1. Yes\n2. No"
+                "Do you want to change language?\n1. Yes\n2. No\n0. Back"
             )
             await save_session(session_id, session)
             return PlainTextResponse(content=response_text)
@@ -223,14 +234,14 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 session["step"] = "select_language"
                 response_text = (
                     "CON Please select language:\n"
-                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
+                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro\n0. Back"
                 )
             elif current_input == "2":
                 session["step"] = "topic_menu"
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
             else:
                 response_text = (
-                    "CON Invalid choice. Do you want to change language?\n1. Yes\n2. No"
+                    "CON Invalid choice. Do you want to change language?\n1. Yes\n2. No\n0. Back"
                 )
             await save_session(session_id, session)
             return PlainTextResponse(content=response_text)
@@ -242,14 +253,14 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
             session["step"] = "select_language"
             response_text = (
                 "CON Please select language:\n"
-                "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
+                "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro\n0. Back"
             )
 
         elif step == "select_language":
             if not current_input or current_input not in LANGUAGES:
                 response_text = (
                     "CON Invalid choice. Please select a valid language:\n"
-                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro"
+                    "1. English\n2. Luganda\n3. Runyankore\n4. Lango\n5. Swahili\n6. Rutooro\n0. Back"
                 )
             else:
                 language = LANGUAGES[current_input]
@@ -260,6 +271,8 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         elif step == "register_name":
             if not current_input:
                 response_text = f"CON {PROMPTS['register_name'][language]}"
+            elif not validate_name(current_input):
+                response_text = f"CON Invalid name. Use letters and spaces only.\n{PROMPTS['register_name'][language]}"
             else:
                 user_data["name"] = current_input
                 session["data"] = user_data
@@ -269,10 +282,17 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         elif step == "register_district":
             if not current_input:
                 response_text = f"CON {PROMPTS['register_district'][language]}"
+            elif not await validate_district(db, current_input):
+                response_text = f"CON Invalid district. Enter a valid district like 'Kampala'.\n{PROMPTS['register_district'][language]}"
             else:
                 user_data["district"] = current_input.title()
                 session["data"] = user_data
                 if not user:
+                    # Check for existing user
+                    result = await db.execute(select(User).where(User.phone_number == phone_number))
+                    if result.scalars().first():
+                        response_text = "END This phone number is already registered. Please use a different number."
+                        return PlainTextResponse(content=response_text)
                     # Create new user
                     names = user_data["name"].split()
                     first_name = names[0]
@@ -280,7 +300,7 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     new_user = User(
                         first_name=first_name,
                         last_name=last_name,
-                        phone_number=phone_number,
+                        phone_number=phone_number,  # Encrypt if needed
                         district_id=user_data["district"],
                         is_active=True,
                         role=RoleEnum.CITIZEN,
@@ -290,6 +310,7 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     await db.commit()
                     await db.refresh(new_user)
                     user = new_user
+                    session["user_id"] = user.id
                 session["step"] = "topic_menu"
                 response_text = f"CON {PROMPTS['ask_topic'][language]}{format_topics(language)}"
 
@@ -305,33 +326,36 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 response_text = f"CON Invalid choice.\n{PROMPTS['ask_topic'][language]}{format_topics(language)}"
 
         elif step == "ask_question":
-            question = current_input.strip() if current_input else ""
+            question = sanitize_input(current_input.strip()) if current_input else ""
             if not question:
                 response_text = f"CON {PROMPTS['question'][language]}"
             else:
                 # Check for spam or offensive content
-                is_spam, spam_prob = detector.predict_spam(question, language.lower())
-                is_offensive = detector.check_offensive(question, language.lower())
+                is_spam, spam_prob = spam_detector.predict_spam(question, language.lower())
+                is_offensive = spam_detector.check_offensive(question, language.lower())
                 if is_spam or is_offensive:
+                    message_flagged.inc()
+                    logger.warning(f"Flagged message from {phone_number}: spam={is_spam}, offensive={is_offensive}, text={question}")
+                    # Save flagged message
                     try:
                         msg = Message(
                             sender_id=user.id,
-                            recipient_id=None,
-                            content=question[:160],
+                            recipient_id=None,  # No recipient for flagged messages
+                            content=question,
                             district_id=user.district_id,
                             created_at=datetime.utcnow(),
                             mp_id=None,
-                            flagged=True
+                            is_flagged=True  # Assumes Message model has is_flagged field
                         )
                         db.add(msg)
                         await db.commit()
-                        response_text = "END Your message contains inappropriate content and has been flagged. Please rephrase."
-                        await delete_session(session_id)
-                        return PlainTextResponse(content=response_text)
-                    except Exception as e:
+                    except SQLAlchemyError as e:
                         logger.error(f"Failed to save flagged message: {e}")
                         await db.rollback()
                         return PlainTextResponse(content="END Something went wrong saving your message.")
+                    response_text = "END Your message was flagged as inappropriate and will be reviewed."
+                    await delete_session(session_id)
+                    return PlainTextResponse(content=response_text)
 
                 mps = await get_mps(db)
                 user_district = (user.district_id or "").lower().replace("district", "").strip()
@@ -350,15 +374,15 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     msg = Message(
                         sender_id=user.id,
                         recipient_id=recipient_id,
-                        content=question[:160],
+                        content=question,
                         district_id=user.district_id,
                         created_at=datetime.utcnow(),
                         mp_id=recipient_id,
-                        flagged=False
+                        is_flagged=False
                     )
                     db.add(msg)
                     await db.commit()
-                except Exception as e:
+                except SQLAlchemyError as e:
                     logger.error(f"Failed to save message: {e}")
                     await db.rollback()
                     return PlainTextResponse(content="END Something went wrong saving your message.")
@@ -368,12 +392,15 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     normalized_recipient = normalize_phone_number(recipient_phone)
                     if not normalized_recipient.startswith("+256"):
                         normalized_recipient = "+256" + normalized_recipient.lstrip("0")
-                    sms_message = f"CIVCON ALERT:\nNew issue from {user.first_name} ({user.phone_number}).\n\nMessage: {question}\nDistrict: {user_district.capitalize()}"
+                    sms_message = f"CIVCON ALERT:\nNew issue from {user.first_name} ({phone_number}).\n\nMessage: {question}\nDistrict: {user_district.capitalize()}"
                     await send_sms_async(phone=normalized_recipient, message=sms_message)
                     response_text = "END Thank you! Your message has been sent successfully to your MP."
                 except Exception as e:
                     logger.error(f"SMS send failed: {e}")
                     response_text = "END Message saved but SMS failed to send."
+                    # Queue for retry
+                    redis = await get_redis()
+                    await redis.lpush("failed_sms", json.dumps({"phone": normalized_recipient, "message": sms_message}))
 
                 await delete_session(session_id)
                 return PlainTextResponse(content=response_text)
@@ -382,23 +409,11 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         await save_session(session_id, session)
         return PlainTextResponse(content=response_text)
 
-    except HTTPException as e:
-        logger.error(f"Rate limit exceeded for {phone_number}: {e.detail}")
-        return PlainTextResponse(content="END Too many requests. Please try again later.")
     except SQLAlchemyError as e:
         logger.error(f"Database error: {e}", exc_info=True)
         await db.rollback()
         return PlainTextResponse(content="END Database error. Please try again later.")
-    except RedisError as e:
-        logger.error(f"Redis error: {e}", exc_info=True)
-        return PlainTextResponse(content="END Session error. Please try again.")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"USSD callback error: {e}", exc_info=True)
         await delete_session(session_id)
         return PlainTextResponse(content="END Something went wrong. Please try again shortly.")
-
-def redact_sensitive(data: dict) -> dict:
-    safe_data = data.copy()
-    if "phoneNumber" in safe_data:
-        safe_data["phoneNumber"] = "REDACTED"
-    return safe_data
