@@ -31,9 +31,6 @@ message_flagged = Counter('message_flagged_total', 'Total flagged messages')
 africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
 sms = africastalking.SMS
 
-# Initialize spam detector (after NLTK resources are downloaded)
-spam_detector = SpamDetector()
-
 # Languages & messages
 LANGUAGES = {"1": "EN", "2": "LG", "3": "RN", "4": "LU", "5": "SW", "6": "RT"}
 
@@ -180,6 +177,9 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         content_type = request.headers.get("content-type", "")
         data = await (request.json() if "application/json" in content_type else request.form())
         data = dict(data)
+
+        # Initialize spam detector here to avoid module-level NLTK issues
+        spam_detector = SpamDetector()
 
         # Redact sensitive data for logging
         def redact_sensitive(data: dict) -> dict:

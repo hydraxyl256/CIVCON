@@ -27,8 +27,8 @@ os.makedirs(NLTK_DATA_PATH, exist_ok=True)
 def download_nltk_resources():
     """Download NLTK resources. Call this at build time."""
     try:
-        nltk.download('punkt_tab', download_dir=NLTK_DATA_PATH, quiet=True)
-        nltk.download('stopwords', download_dir=NLTK_DATA_PATH, quiet=True)
+        nltk.download('punkt_tab', download_dir=NLTK_DATA_PATH, quiet=True, timeout=60)
+        nltk.download('stopwords', download_dir=NLTK_DATA_PATH, quiet=True, timeout=60)
         logger.info("NLTK resources downloaded successfully to %s", NLTK_DATA_PATH)
     except Exception as e:
         logger.error(f"Failed to download NLTK resources: {e}")
@@ -49,7 +49,7 @@ class SpamDetector:
         self.pipelines = {}  # Store pipelines per language
         self.is_loaded = False
         self.stop_words = {
-            "en": set(stopwords.words('english')) if 'english' in stopwords.fileids() else set(),
+            "en": self._load_stopwords('english'),
             "lg": set(),  # Add Luganda stopwords if available
             "rn": set(),  # Add Runyankore stopwords
             "lu": set(),  # Add Lango stopwords
@@ -57,6 +57,14 @@ class SpamDetector:
             "rt": set()   # Add Rutooro stopwords
         }
         self._load_or_train_model()
+
+    def _load_stopwords(self, language: str) -> set:
+        """Load stopwords for a language with error handling."""
+        try:
+            return set(stopwords.words(language)) if language in stopwords.fileids() else set()
+        except LookupError:
+            logger.warning(f"Stopwords for {language} not found. Using empty set.")
+            return set()
 
     def _load_or_train_model(self):
         """Load or train models for each language."""
@@ -147,9 +155,14 @@ class SpamDetector:
             stop_words = self.stop_words.get(lang, set())
             tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
             return ' '.join(tokens)
+        except LookupError:
+            logger.error(f"Tokenization failed: NLTK punkt resource not found. Using fallback.")
+            tokens = text.lower().split()
+            stop_words = self.stop_words.get(lang, set())
+            tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
+            return ' '.join(tokens)
         except Exception as e:
             logger.error(f"Text preprocessing failed: {e}")
-            # Fallback: simple split and filter
             tokens = text.lower().split()
             stop_words = self.stop_words.get(lang, set())
             tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
