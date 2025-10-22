@@ -18,12 +18,20 @@ logger = logging.getLogger("app.spam_detector")
 spam_detections = Counter('spam_detections_total', 'Total spam detections')
 offensive_detections = Counter('offensive_detections_total', 'Total offensive content detections')
 
-# Download NLTK resources
-try:
-    nltk.download('punkt_tab', quiet=True)
-    nltk.download('stopwords', quiet=True)
-except Exception as e:
-    logger.error(f"Failed to download NLTK resources: {e}")
+# Set NLTK data path for Render (persistent directory)
+NLTK_DATA_PATH = os.environ.get('NLTK_DATA_PATH', '/opt/render/nltk_data')
+nltk.data.path.append(NLTK_DATA_PATH)
+os.makedirs(NLTK_DATA_PATH, exist_ok=True)
+
+# Download NLTK resources (this will be called at build time via script)
+def download_nltk_resources():
+    """Download NLTK resources. Call this at build time."""
+    try:
+        nltk.download('punkt_tab', download_dir=NLTK_DATA_PATH, quiet=True)
+        nltk.download('stopwords', download_dir=NLTK_DATA_PATH, quiet=True)
+        logger.info("NLTK resources downloaded successfully to %s", NLTK_DATA_PATH)
+    except Exception as e:
+        logger.error(f"Failed to download NLTK resources: {e}")
 
 # Expanded offensive words list (extend further for production)
 OFFENSIVE_WORDS = {
@@ -141,7 +149,11 @@ class SpamDetector:
             return ' '.join(tokens)
         except Exception as e:
             logger.error(f"Text preprocessing failed: {e}")
-            return text.lower()  # Fallback to basic preprocessing
+            # Fallback: simple split and filter
+            tokens = text.lower().split()
+            stop_words = self.stop_words.get(lang, set())
+            tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
+            return ' '.join(tokens)
 
     def predict_spam(self, text: str, lang: str = "en") -> Tuple[bool, float]:
         """Predict if text is spam. Returns (is_spam, probability)."""
@@ -170,3 +182,6 @@ class SpamDetector:
             offensive_detections.inc()
             logger.warning(f"Offensive content detected in {lang}: {text}")
         return is_offensive
+
+# Global detector instance (downloads happen at build time)
+detector = SpamDetector()
