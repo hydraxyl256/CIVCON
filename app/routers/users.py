@@ -14,11 +14,10 @@ import logging
 from datetime import datetime
 import json
 from sqlalchemy.orm import selectinload
-from routers.oauth2 import get_current_user
+from app.routers.oauth2 import get_current_user
 from routers.auth import upload_to_cloudinary
 from app.schemas import  UserResponse, UserUpdate
 import cloudinary.uploader
-
 from app.schemas import UserOut
 from app.models import Post, Comment, Vote
 from sqlalchemy import delete
