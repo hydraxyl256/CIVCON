@@ -14,7 +14,14 @@ import logging
 from datetime import datetime
 import json
 from sqlalchemy.orm import selectinload
+from routers.oauth2 import get_current_user
+from routers.auth import upload_to_cloudinary
 from app.schemas import  UserResponse, UserUpdate
+import cloudinary.uploader
+
+from app.schemas import UserOut
+from app.models import Post, Comment, Vote
+from sqlalchemy import delete
 
 
 
@@ -28,25 +35,6 @@ router = APIRouter(prefix="/users", tags=["users"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    # Async call to get user
-    user = await get_user_by_email(db, email=email)  
-    if user is None:
-        raise credentials_exception
-    return user
 
 
 @router.get("/me", response_model=UserResponse)
@@ -151,3 +139,108 @@ async def update_profile(
 
     #  Return updated user
     return current_user
+
+
+@router.put("/profile", response_model=UserOut)
+async def update_user_profile(
+    first_name: str = Form(None),
+    last_name: str = Form(None),
+    occupation: str = Form(None),
+    bio: str = Form(None),
+    region: str = Form(None),
+    district_id: str = Form(None),
+    privacy_level: str = Form(None),
+    profile_image: UploadFile = File(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update logged-in user's profile details."""
+    try:
+        result = await db.execute(select(User).where(User.id == current_user.id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Update editable fields
+        if first_name: user.first_name = first_name
+        if last_name: user.last_name = last_name
+        if occupation: user.occupation = occupation
+        if bio: user.bio = bio
+        if region: user.region = region
+        if district_id: user.district_id = district_id
+        if privacy_level: user.privacy_level = privacy_level
+
+        # Cloudinary upload
+        if profile_image:
+            try:
+                upload_result = await upload_to_cloudinary(profile_image, folder="civcon/profiles")
+                user.profile_image = upload_result
+            except Exception as e:
+                logger.exception("Cloudinary upload failed")
+                raise HTTPException(status_code=500, detail="Image upload failed")
+
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f" Profile updated for {user.email}")
+
+        return UserOut.model_validate(user)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error while updating profile")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred")
+
+
+
+# deactivate account endpoint
+@router.patch("/deactivate", status_code=status.HTTP_200_OK)
+async def deactivate_account(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Soft deactivate user account (keeps data but disables login)."""
+    try:
+        if not current_user.is_active:
+            raise HTTPException(status_code=400, detail="Account already deactivated")
+
+        current_user.is_active = False
+        current_user.deactivated_at = datetime.utcnow()
+
+        db.add(current_user)
+        await db.commit()
+
+        logger.info(f"🚫 Account deactivated for {current_user.email}")
+        return {"message": "Account successfully deactivated. You can reactivate anytime by contacting support."}
+
+    except Exception as e:
+        logger.exception("Error deactivating account")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+
+
+# delete account endpoint
+@router.delete("/delete", status_code=status.HTTP_200_OK)
+async def delete_account(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Permanently delete a user and related data."""
+    try:
+        # Delete related posts, comments, likes (optional depending on models)
+        await db.execute(delete(Vote).where(Vote.user_id == current_user.id))
+        await db.execute(delete(Comment).where(Comment.user_id == current_user.id))
+        await db.execute(delete(Post).where(Post.author_id == current_user.id))
+
+        # Delete user record
+        await db.execute(delete(User).where(User.id == current_user.id))
+        await db.commit()
+
+        logger.info(f"💀 User {current_user.email} deleted successfully.")
+        return {"message": "Your account and all data have been permanently deleted."}
+
+    except Exception as e:
+        logger.exception("Error deleting account")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
