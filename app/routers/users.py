@@ -15,7 +15,7 @@ from datetime import datetime
 import json
 from sqlalchemy.orm import selectinload
 from app.routers.oauth2 import get_current_user
-from routers.auth import upload_to_cloudinary
+from app.routers.auth import upload_to_cloudinary
 from app.schemas import  UserResponse, UserUpdate
 import cloudinary.uploader
 from app.schemas import UserOut
@@ -35,7 +35,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 
-
 @router.get("/me", response_model=UserResponse)
 async def get_profile(
     current_user: User = Depends(get_current_user),
@@ -52,92 +51,6 @@ async def get_profile(
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
-
-@router.put("/me", response_model=UserResponse)
-async def update_profile(
-    first_name: str = Form(None),
-    last_name: str = Form(None),
-    email: EmailStr = Form(None),
-    region: str = Form(None),
-    district_id: str = Form(None),
-    county_id: str = Form(None),
-    sub_county_id: str = Form(None),
-    parish_id: str = Form(None),
-    village_id: str = Form(None),
-    occupation: str = Form(None),
-    bio: str = Form(None),
-    political_interest: str = Form(None),
-    community_role: str = Form(None),
-    interests: str = Form(None),
-    notifications: str = Form(None),
-    privacy_level: str = Form(None),
-    profile_image: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    #  Update user fields
-    update_data = {
-        "first_name": first_name,
-        "last_name": last_name,
-        "email": email,
-        "region": region,
-        "district_id": district_id,
-        "county_id": county_id,
-        "sub_county_id": sub_county_id,
-        "parish_id": parish_id,
-        "village_id": village_id,
-        "occupation": occupation,
-        "bio": bio,
-        "political_interest": political_interest,
-        "community_role": community_role,
-        "interests": json.loads(interests) if interests else None,
-        "notifications": json.loads(notifications) if notifications else None,
-        "privacy_level": privacy_level
-    }
-
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(current_user, key, value)
-
-    # Handle profile image
-    if profile_image:
-        os.makedirs("static/uploads", exist_ok=True)
-        file_extension = profile_image.filename.split('.')[-1]
-        filename = f"{uuid.uuid4()}.{file_extension}"
-        profile_image_path = f"static/uploads/{filename}"
-        with open(profile_image_path, "wb") as f:
-            f.write(profile_image.file.read())
-        current_user.profile_image = profile_image_path
-
-    # Update or create MP record if user is MP
-    if current_user.role == Role.MP:
-        result = await db.execute(select(MP).where(MP.user_id == current_user.id))
-        existing_mp = result.scalars().first()
-
-        if existing_mp:
-            existing_mp.name = f"{current_user.first_name} {current_user.last_name}"
-            existing_mp.phone_number = current_user.phone_number
-            existing_mp.email = current_user.email
-            existing_mp.district_id = current_user.district_id
-            existing_mp.updated_at = datetime.utcnow()
-            db.add(existing_mp)
-        else:
-            new_mp = MP(
-                name=f"{current_user.first_name} {current_user.last_name}",
-                phone_number=current_user.phone_number,
-                email=current_user.email,
-                district_id=current_user.district_id,
-                user_id=current_user.id
-            )
-            db.add(new_mp)
-
-    # Commit changes
-    await db.commit()
-    await db.refresh(current_user)
-    logger.info(f"Profile updated for user {current_user.email}")
-
-    #  Return updated user
-    return current_user
 
 
 @router.put("/profile", response_model=UserOut)
