@@ -22,7 +22,7 @@ async def vote_post(
     # Validate vote direction
     if vote.dir not in [0, 1]:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Vote direction must be 0 (unvote) or 1 (upvote)"
         )
 
