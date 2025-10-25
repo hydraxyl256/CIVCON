@@ -111,6 +111,8 @@ class Post(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     search_vector = Column(TSVectorType("title", "content"), nullable=True)
     media = relationship("PostMedia", back_populates="post", cascade="all, delete-orphan")
+    share_count = Column(Integer, default=0)
+
 
     # Relationships
     author = relationship("User", back_populates="posts")

@@ -214,3 +214,46 @@ async def list_live_feeds(skip: int = 0, limit: int = 10, district_id: Optional[
     stmt = stmt.offset(skip).limit(limit)
     result = await db.execute(stmt)
     return result.scalars().unique().all()
+
+
+#  Share Post
+@router.post("/{post_id}/share")
+async def share_post(
+    post_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Increment the share count of a post and optionally notify the author.
+    """
+    # Ensure post exists
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    # Increment share count
+    post.share_count = (getattr(post, "share_count", 0) or 0) + 1
+    post.updated_at = datetime.utcnow()
+
+    db.add(post)
+    await db.commit()
+    await db.refresh(post)
+
+    # Optional notification for the author (don’t notify yourself)
+    if post.author_id != current_user.id:
+        from app.models import Notification
+        notification = Notification(
+            user_id=post.author_id,
+            message=f"{current_user.first_name} shared your post.",
+            post_id=post.id,
+            created_at=datetime.utcnow()
+        )
+        db.add(notification)
+        await db.commit()
+
+    return {
+        "message": "Post shared successfully!",
+        "post_id": post.id,
+        "share_count": post.share_count
+    }
