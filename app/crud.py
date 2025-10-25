@@ -1,3 +1,6 @@
+from fastapi import HTTPException, status
+import random
+import string
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -31,21 +34,44 @@ def derive_role(community_role: Optional[str]) -> Role:
     return Role.CITIZEN
 
 
+#  Helper: Generate a unique username
+async def generate_unique_username(first_name: str, last_name: str, db: AsyncSession) -> str:
+    """
+    Generate a unique username from first+last name.
+    Adds random digits if a duplicate exists.
+    Example: eronlaban, eronlaban_482, etc.
+    """
+    base_username = f"{first_name.lower()}{last_name.lower()}".replace(" ", "")
+    username = base_username
+
+    # Check for duplicates and retry with random suffix
+    while True:
+        result = await db.execute(select(User).where(User.username == username))
+        existing_user = result.scalar_one_or_none()
+        if not existing_user:
+            break  # unique username found
+        suffix = ''.join(random.choices(string.digits, k=3))
+        username = f"{base_username}_{suffix}"
+
+    return username
+
+
 #  CREATE USER 
-async def create_user(db: AsyncSession, user: UserCreate, profile_image_path: str = None):
+async def create_user(db: AsyncSession, user: "UserCreate", profile_image_path: str = None):
     hashed_password = bcrypt.hash(user.password)
 
-    # Only handle interests
-    interests = user.interests if user.interests else []
+    # Validate interests field
+    interests = user.interests if isinstance(user.interests, list) else []
 
-    # Validate types
-    if not isinstance(interests, list):
-        interests = []
+    #  Auto-generate unique username
+    username = await generate_unique_username(user.first_name, user.last_name, db)
 
+    #  Create and save user
     db_user = User(
         first_name=user.first_name,
         last_name=user.last_name,
         email=user.email,
+        username=username,  
         hashed_password=hashed_password,
         role=user.role,
         region=user.region,
@@ -57,12 +83,20 @@ async def create_user(db: AsyncSession, user: UserCreate, profile_image_path: st
         political_interest=user.political_interest,
         community_role=user.community_role,
         interests=interests,
-        privacy_level=user.privacy_level
+        privacy_level=user.privacy_level,
     )
 
     db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
+    try:
+        await db.commit()
+        await db.refresh(db_user)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating user: {str(e)}",
+        )
+
     return db_user
 
 # GET USERS 

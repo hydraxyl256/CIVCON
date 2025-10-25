@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from app.database import get_db
-from app.models import User, Post, Comment, Vote, LiveFeed, PostMedia
+from app.models import User, Post, Comment, Vote, LiveFeed, PostMedia, Notification
 from app.schemas import PostResponse, PostCreate, CommentResponse, CommentCreate, LiveFeedResponse, LiveFeedCreate, PostMediaOut
 import logging
 import os
@@ -132,40 +132,58 @@ async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-# Create comment
+#  Create Comment
 @router.post("/{post_id}/comments", response_model=CommentResponse)
 async def create_comment(
     post_id: int,
-    content: str = Form(...),
+    payload: dict = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
+    """
+    Create a new comment on a specific post.
+    Accepts JSON: { "content": "your comment" }
+    """
+    content = payload.get("content")
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="Comment content is required.")
+
+    #  Ensure post exists
     stmt = select(Post).where(Post.id == post_id)
     post = (await db.execute(stmt)).scalar_one_or_none()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
+    #  Create comment
     db_comment = Comment(
-        content=content,
+        content=content.strip(),
         author_id=current_user.id,
         post_id=post_id,
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
     )
+
     db.add(db_comment)
     await db.commit()
     await db.refresh(db_comment)
     return db_comment
 
 
-
-# List comments
+#  List Comments for a Post
 @router.get("/{post_id}/comments", response_model=List[CommentResponse])
 async def list_comments(post_id: int, db: AsyncSession = Depends(get_db)):
-    stmt = select(Comment).where(Comment.post_id == post_id).options(selectinload(Comment.replies))
+    """
+    Get all comments for a post (includes replies).
+    """
+    stmt = (
+        select(Comment)
+        .where(Comment.post_id == post_id)
+        .options(selectinload(Comment.replies))
+        .order_by(Comment.created_at.desc())
+    )
     result = await db.execute(stmt)
     return result.scalars().unique().all()
 
-
+# Like Endpoint
 @router.post("/{post_id}/like")
 async def like_post(
     post_id: int,
@@ -206,6 +224,8 @@ async def create_live_feed(live_feed: LiveFeedCreate, current_user: User = Depen
     await db.refresh(db_feed)
     return db_feed
 
+
+# List live feeds
 @router.get("/live", response_model=List[LiveFeedResponse])
 async def list_live_feeds(skip: int = 0, limit: int = 10, district_id: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     stmt = select(LiveFeed)
@@ -216,44 +236,69 @@ async def list_live_feeds(skip: int = 0, limit: int = 10, district_id: Optional[
     return result.scalars().unique().all()
 
 
-#  Share Post
-@router.post("/{post_id}/share")
+#  Share Post (Return Full Updated Post)
+@router.post("/{post_id}/share", response_model=PostResponse)
 async def share_post(
     post_id: int,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
 ):
     """
-    Increment the share count of a post and optionally notify the author.
+    Increment post share count, optionally notify author,
+    and return the full updated Post object.
     """
-    # Ensure post exists
-    result = await db.execute(select(Post).where(Post.id == post_id))
+
+    #  Ensure post exists
+    result = await db.execute(
+        select(Post)
+        .where(Post.id == post_id)
+        .options(
+            selectinload(Post.author),
+            selectinload(Post.comments),
+            selectinload(Post.media)
+        )
+    )
     post = result.scalar_one_or_none()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    # Increment share count
+    #  Increment share count safely
     post.share_count = (getattr(post, "share_count", 0) or 0) + 1
     post.updated_at = datetime.utcnow()
 
-    db.add(post)
-    await db.commit()
-    await db.refresh(post)
-
-    # Optional notification for the author (don’t notify yourself)
-    if post.author_id != current_user.id:
-        from app.models import Notification
-        notification = Notification(
-            user_id=post.author_id,
-            message=f"{current_user.first_name} shared your post.",
-            post_id=post.id,
-            created_at=datetime.utcnow()
-        )
-        db.add(notification)
+    try:
+        db.add(post)
         await db.commit()
+        await db.refresh(post)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update share count: {e}")
 
-    return {
-        "message": "Post shared successfully!",
-        "post_id": post.id,
-        "share_count": post.share_count
-    }
+    #  Optional author notification
+    if post.author_id != current_user.id:
+        try:
+            notification = Notification(
+                user_id=post.author_id,
+                message=f"{current_user.first_name} shared your post.",
+                post_id=post.id,
+                created_at=datetime.utcnow(),
+            )
+            db.add(notification)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Notification creation failed: {e}")
+
+    #  Re-fetch post with relationships (fresh data)
+    refreshed_post = await db.execute(
+        select(Post)
+        .where(Post.id == post_id)
+        .options(
+            selectinload(Post.author),
+            selectinload(Post.comments),
+            selectinload(Post.media)
+        )
+    )
+    updated_post = refreshed_post.scalar_one_or_none()
+
+    return updated_post

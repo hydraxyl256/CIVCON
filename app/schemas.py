@@ -52,6 +52,7 @@ class UserOut(BaseModel):
     id: int
     first_name: str
     last_name: str
+    username: Optional[str] = None
     email: EmailStr
     profile_image: Optional[str] = None
     role: Role
@@ -125,7 +126,7 @@ class PostResponse(BaseModel):
     title: str
     content: str
     media: List[PostMediaOut] = []
-    author_id: int
+    author_id: UserBase
     district_id: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
