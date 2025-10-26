@@ -29,8 +29,7 @@ cloudinary.config(
 )
 
 
-
-@router.post("/", response_model=PostResponse)
+# Create Post with Media Uploads
 @router.post("/", response_model=PostResponse)
 async def create_post(
     title: str = Form(...),
@@ -40,10 +39,11 @@ async def create_post(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    #  Create Post
     post = Post(
         title=title,
         content=content,
-        author_id=current_user.id,  
+        author_id=current_user.id,
         district_id=district_id
     )
 
@@ -51,19 +51,19 @@ async def create_post(
     await db.commit()
     await db.refresh(post)
 
+    #  Handle Media Uploads
     media_list = []
     if media_files:
         for file in media_files:
-            # Upload directly to Cloudinary
             upload_result = cloudinary.uploader.upload(
                 file.file,
                 folder="civcon/posts",
                 resource_type="auto"  # supports image/video
             )
-            
+
             media = PostMedia(
                 post_id=post.id,
-                media_url=upload_result["secure_url"],  # Cloudinary hosted URL
+                media_url=upload_result["secure_url"],
                 media_type=file.content_type
             )
             db.add(media)
@@ -71,18 +71,21 @@ async def create_post(
         await db.commit()
 
     await db.refresh(post)
+
+    #   Return Pydantic-compliant response
     return PostResponse(
         id=post.id,
         title=post.title,
         content=post.content,
         media=[PostMediaOut.from_orm(m) for m in media_list],
-        author_id=post.author_id,
+        author=current_user,  
         district_id=post.district_id,
         created_at=post.created_at,
         updated_at=post.updated_at,
-        like_count=0
+        like_count=0,
+        comments=[],
+        share_count=getattr(post, "share_count", 0)
     )
-
 
 
 # List posts with like count

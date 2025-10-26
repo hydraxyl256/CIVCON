@@ -126,12 +126,13 @@ class PostResponse(BaseModel):
     title: str
     content: str
     media: List[PostMediaOut] = []
-    author_id: UserBase
+    author: UserBase
     district_id: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
     like_count: int
-    comments: List[CommentResponse] = []  
+    comments: List[CommentResponse] = [] 
+    share_count: Optional[int] = 0   
 
     model_config = {"from_attributes": True}
 
