@@ -16,6 +16,7 @@ class UserBase(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
+    username: str
     role: Role = Role.CITIZEN
     region: Optional[str] = None
     district_id: Optional[str] = None
