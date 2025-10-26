@@ -151,7 +151,7 @@ class Comment(Base):
     author = relationship("User", back_populates="comments")
     post = relationship("Post", back_populates="comments")
     parent = relationship("Comment", remote_side=[id], back_populates="replies")
-    replies = relationship("Comment", back_populates="parent", cascade="all, delete-orphan")
+    replies = relationship("Comment", back_populates="parent", cascade="all, delete-orphan", lazy="selectin")
 
 
 class Vote(Base):
