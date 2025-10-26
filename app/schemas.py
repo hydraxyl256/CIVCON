@@ -99,19 +99,18 @@ class PostCreate(BaseModel):
 # COMMENT SCHEMAS
 class CommentCreate(BaseModel):
     content: str
-    post_id: int
     parent_id: Optional[int] = None
 
 
 class CommentResponse(BaseModel):
     id: int
     content: str
-    author: UserPublic  # 👈 safer user version (no email)
+    author: UserPublic  
     parent_id: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]
-    replies: List["CommentResponse"] = []
-
+    replies: List["CommentResponse"] = Field(default_factory=list)
+    
     model_config = {"from_attributes": True}
 
 

@@ -16,7 +16,7 @@ router = APIRouter(prefix="/posts", tags=["Comments"])
 @router.post("/{post_id}/comments", response_model=CommentResponse)
 async def create_comment(
     post_id: int,
-    payload: CommentCreate = Body(...),
+    payload: CommentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
