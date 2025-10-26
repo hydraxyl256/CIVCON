@@ -14,6 +14,7 @@ import cloudinary
 import cloudinary.uploader
 from app.config import settings
 from sqlalchemy import func
+from app.utils.social_share import share_to_social_media, send_inbox_message
 
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
@@ -101,7 +102,8 @@ async def list_posts(
         .options(
             selectinload(Post.votes),
             selectinload(Post.media),
-            selectinload(Post.author)
+            selectinload(Post.author),
+            selectinload(Post.comments)
         )
         .offset(skip)
         .limit(limit)
@@ -118,13 +120,13 @@ async def list_posts(
             id=p.id,
             title=p.title,
             content=p.content,
-            author=p.author,  #  includes first_name, last_name, username, profile_image
+            author=p.author,  
             district_id=p.district_id,
             media=[PostMediaOut.from_orm(m) for m in p.media],
             created_at=p.created_at,
             updated_at=p.updated_at,
             like_count=len(p.votes),
-            comments=[],
+            comments=[CommentResponse.from_orm(c) for c in p.comments],
             share_count=p.share_count or 0,
         )
         for p in posts
@@ -257,33 +259,37 @@ async def list_live_feeds(skip: int = 0, limit: int = 10, district_id: Optional[
     return result.scalars().unique().all()
 
 
-#  Share Post (Return Full Updated Post)
 @router.post("/{post_id}/share", response_model=PostResponse)
 async def share_post(
     post_id: int,
+    share_to: str | None = None,  # "facebook", "twitter", "inbox"
+    message: str | None = None,   # custom message to include
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Increment post share count, optionally notify author,
-    and return the full updated Post object.
+    ✅ Share post to other users or social media
+    - Increments share_count
+    - Optionally sends notification or social post
+    - Returns full updated PostResponse
     """
 
-    #  Ensure post exists
+    # 🔹 1. Fetch post
     result = await db.execute(
         select(Post)
         .where(Post.id == post_id)
         .options(
             selectinload(Post.author),
             selectinload(Post.comments),
-            selectinload(Post.media)
+            selectinload(Post.media),
+            selectinload(Post.votes)
         )
     )
     post = result.scalar_one_or_none()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    #  Increment share count safely
+    # 🔹 2. Increment share count
     post.share_count = (getattr(post, "share_count", 0) or 0) + 1
     post.updated_at = datetime.utcnow()
 
@@ -295,31 +301,43 @@ async def share_post(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update share count: {e}")
 
-    #  Optional author notification
+    # 🔹 3. Optional: send a notification to the author
     if post.author_id != current_user.id:
+        notification = Notification(
+            user_id=post.author_id,
+            message=f"{current_user.first_name} shared your post.",
+            post_id=post.id,
+            created_at=datetime.utcnow(),
+        )
+        db.add(notification)
         try:
-            notification = Notification(
-                user_id=post.author_id,
-                message=f"{current_user.first_name} shared your post.",
-                post_id=post.id,
-                created_at=datetime.utcnow(),
-            )
-            db.add(notification)
             await db.commit()
         except Exception as e:
             await db.rollback()
             print(f"Notification creation failed: {e}")
 
-    #  Re-fetch post with relationships (fresh data)
-    refreshed_post = await db.execute(
-        select(Post)
-        .where(Post.id == post_id)
-        .options(
-            selectinload(Post.author),
-            selectinload(Post.comments),
-            selectinload(Post.media)
-        )
-    )
-    updated_post = refreshed_post.scalar_one_or_none()
+    # 🔹 4. Optional: share externally (social media / inbox)
+    try:
+        if share_to == "facebook":
+            await share_to_social_media("facebook", post, current_user)
+        elif share_to == "twitter":
+            await share_to_social_media("twitter", post, current_user)
+        elif share_to == "inbox":
+            await send_inbox_message(post, current_user, message)
+    except Exception as e:
+        print(f"External share failed: {e}")
 
-    return updated_post
+    #  Return full PostResponse
+    return PostResponse(
+        id=post.id,
+        title=post.title,
+        content=post.content,
+        author=post.author,
+        district_id=post.district_id,
+        media=[PostMediaOut.from_orm(m) for m in post.media],
+        created_at=post.created_at,
+        updated_at=post.updated_at,
+        like_count=len(post.votes),
+        comments=[CommentResponse.from_orm(c) for c in post.comments],
+        share_count=post.share_count,
+    )
