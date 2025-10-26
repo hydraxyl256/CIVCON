@@ -97,31 +97,45 @@ async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
     return comments
 
 
-
-@router.get("/", response_model=schemas.NotificationListResponse)
-async def list_comments(
-    post_id: Optional[int] = None,
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    db: AsyncSession = Depends(get_db)
+# List Posts with Comments
+@router.get("/", response_model=List[PostResponse])
+async def list_posts(
+    skip: int = 0,
+    limit: int = 10,
+    district_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
-
-    # Base query
-    stmt = select(models.Comment).options(selectinload(models.Comment.author))
-    if post_id:
-        stmt = stmt.where(models.Comment.post_id == post_id)
-
-    # Count total comments
-    total_result = await db.execute(
-        select(models.Comment).where(models.Comment.post_id == post_id) if post_id else select(models.Comment)
+    stmt = (
+        select(Post)
+        .options(
+            selectinload(Post.author),
+            selectinload(Post.media),
+            selectinload(Post.votes),
+            #  Load comments and their nested replies
+            selectinload(Post.comments).selectinload(Comment.replies).selectinload(Comment.author),
+        )
+        .offset(skip)
+        .limit(limit)
     )
-    total = len(total_result.scalars().all())
-    pages = (total + limit - 1) // limit  # ceiling division
 
-    # Apply pagination
-    offset = (page - 1) * limit
-    result = await db.execute(stmt.offset(offset).limit(limit))
-    comments = result.scalars().all()
+    if district_id:
+        stmt = stmt.filter(Post.district_id == district_id)
 
-    pagination = schemas.Pagination(page=page, size=limit, total=total, pages=pages)
-    return schemas.NotificationListResponse(data=comments, pagination=pagination)
+    result = await db.execute(stmt)
+    posts = result.scalars().unique().all()
+
+    return [
+        PostResponse(
+            id=p.id,
+            title=p.title,
+            content=p.content,
+            author=UserBase.from_orm(p.author),
+            district_id=p.district_id,
+            media=[PostMediaOut.from_orm(m) for m in p.media],
+            created_at=p.created_at,
+            updated_at=p.updated_at,
+            like_count=len(p.votes),
+            comments=[CommentResponse.from_orm(c) for c in p.comments],  # ✅ now safe
+        )
+        for p in posts
+    ]
