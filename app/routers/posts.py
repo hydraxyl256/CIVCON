@@ -89,50 +89,6 @@ async def create_post(
     )
 
 
-# List posts with like count
-@router.get("/", response_model=List[PostResponse])
-async def list_posts(
-    skip: int = 0,
-    limit: int = 10,
-    district_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = (
-        select(Post)
-        .options(
-            selectinload(Post.votes),
-            selectinload(Post.media),
-            selectinload(Post.author),
-            selectinload(Post.comments)
-        )
-        .offset(skip)
-        .limit(limit)
-    )
-
-    if district_id:
-        stmt = stmt.filter(Post.district_id == district_id)
-
-    result = await db.execute(stmt)
-    posts = result.scalars().unique().all()
-
-    return [
-        PostResponse(
-            id=p.id,
-            title=p.title,
-            content=p.content,
-            author=p.author,  
-            district_id=p.district_id,
-            media=[PostMediaOut.from_orm(m) for m in p.media],
-            created_at=p.created_at,
-            updated_at=p.updated_at,
-            like_count=len(p.votes),
-            comments=[CommentResponse.from_orm(c) for c in p.comments],
-            share_count=p.share_count or 0,
-        )
-        for p in posts
-    ]
-
-
 
 # Get a single post
 @router.get("/{post_id}", response_model=PostResponse)
@@ -202,7 +158,7 @@ async def create_comment(
 
 
 
-#  List Comments for a Post
+# Get Comments for a Post
 @router.get("/{post_id}/comments", response_model=List[CommentResponse])
 async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
     """
@@ -222,18 +178,6 @@ async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
 
 
 # List Posts with Comments (with pre-fetching)
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
-from typing import List, Optional
-
-from app.database import get_db
-from app.models import Post, Comment
-from app.schemas import PostResponse, UserBase, PostMediaOut
-
-router = APIRouter()
-
 @router.get("/", response_model=List[PostResponse])
 async def list_posts(
     skip: int = 0,
@@ -374,13 +318,13 @@ async def share_post(
     current_user: User = Depends(get_current_user),
 ):
     """
-    ✅ Share post to other users or social media
+     Share post to other users or social media
     - Increments share_count
     - Optionally sends notification or social post
     - Returns full updated PostResponse
     """
 
-    # 🔹 1. Fetch post
+    #  1. Fetch post
     result = await db.execute(
         select(Post)
         .where(Post.id == post_id)
@@ -395,7 +339,7 @@ async def share_post(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    # 🔹 2. Increment share count
+    #  2. Increment share count
     post.share_count = (getattr(post, "share_count", 0) or 0) + 1
     post.updated_at = datetime.utcnow()
 
@@ -407,7 +351,7 @@ async def share_post(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update share count: {e}")
 
-    # 🔹 3. Optional: send a notification to the author
+    #  3. Optional: send a notification to the author
     if post.author_id != current_user.id:
         notification = Notification(
             user_id=post.author_id,
@@ -422,7 +366,7 @@ async def share_post(
             await db.rollback()
             print(f"Notification creation failed: {e}")
 
-    # 🔹 4. Optional: share externally (social media / inbox)
+    #  4. Optional: share externally (social media / inbox)
     try:
         if share_to == "facebook":
             await share_to_social_media("facebook", post, current_user)
