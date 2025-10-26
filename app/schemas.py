@@ -55,7 +55,8 @@ class UserOut(BaseModel):
     id: int
     first_name: str
     last_name: str
-    username: str                     
+    username: str      
+    email: Optional[EmailStr] = None               
     role: Optional[str] = None        
     profile_image: Optional[str] = None
 
