@@ -87,29 +87,55 @@ async def create_post(
 
 # List posts with like count
 @router.get("/", response_model=List[PostResponse])
-async def list_posts(skip: int = 0, limit: int = 10, district_id: Optional[str] = None, db: AsyncSession = Depends(get_db)):
-    stmt = select(Post).options(selectinload(Post.votes), selectinload(Post.media))
-    if district_id:
-        stmt = stmt.filter(Post.district_id == district_id)
-    stmt = stmt.offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    posts = result.scalars().unique().all()
-
-    return [
-        PostResponse(
-            id=p.id,
-            title=p.title,
-            content=p.content,
-            author_id=p.author_id,
-            district_id=p.district_id,
-            media=[PostMediaOut.from_orm(m) for m in p.media],
-            created_at=p.created_at,
-            updated_at=p.updated_at,
-            like_count=len(p.votes)
+async def list_posts(
+    skip: int = 0,
+    limit: int = 10,
+    district_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieve posts with author, media, and like counts.
+    """
+    try:
+        stmt = (
+            select(Post)
+            .options(
+                selectinload(Post.author),   
+                selectinload(Post.media),    
+                selectinload(Post.votes)     
+            )
+            .offset(skip)
+            .limit(limit)
         )
-        for p in posts
-    ]
 
+        if district_id:
+            stmt = stmt.filter(Post.district_id == district_id)
+
+        result = await db.execute(stmt)
+        posts = result.scalars().unique().all()
+
+        if not posts:
+            return []
+
+        return [
+            PostResponse(
+                id=p.id,
+                title=p.title,
+                content=p.content,
+                author=p.author,  
+                district_id=p.district_id,
+                media=[PostMediaOut.from_orm(m) for m in p.media],
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+                like_count=len(p.votes),
+                share_count=getattr(p, "share_count", 0)
+            )
+            for p in posts
+        ]
+
+    except Exception as e:
+        print("Error fetching posts:", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # Get a single post
 @router.get("/{post_id}", response_model=PostResponse)
