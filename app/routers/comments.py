@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Body
+from app.routers.oauth2 import get_current_user
+from app.schemas import CommentResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -12,6 +14,9 @@ import cloudinary
 import cloudinary.uploader
 import os
 from app.config import settings
+from app.models import Comment, Post, User
+from datetime import datetime
+
 
 # Configure Cloudinary
 cloudinary.config(
@@ -27,71 +32,43 @@ router = APIRouter(
 )
 
 
-@router.post("/{post_id}", response_model=schemas.CommentResponse)
+#  Create Comment
+@router.post("/{post_id}/comments", response_model=CommentResponse)
 async def create_comment(
     post_id: int,
-    content: str = Form(...),
-    file: Optional[UploadFile] = File(None),
+    payload: dict = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: schemas.UserOut = Depends(oauth2.get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    # Validate post exists
-    result = await db.execute(select(models.Post).where(models.Post.id == post_id))
-    post = result.scalar_one_or_none()
+    """
+    Create a new comment on a specific post.
+    Accepts JSON: { "content": "your comment" }
+    """
+    content = payload.get("content")
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="Comment content is required.")
+
+    #  Ensure post exists
+    stmt = select(Post).where(Post.id == post_id)
+    post = (await db.execute(stmt)).scalar_one_or_none()
     if not post:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+        raise HTTPException(status_code=404, detail="Post not found")
 
-    # Handle file upload (Cloudinary)
-    media_url = None
-    if file:
-        allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mov'}
-        ext = Path(file.filename).suffix.lower()
-        if ext not in allowed_extensions:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
-
-        # Upload directly to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            file.file,
-            folder="civcon/comments",
-            resource_type="auto"  # handles image or video
-        )
-        media_url = upload_result["secure_url"]
-
-    # Create comment
-    db_comment = models.Comment(
-        content=content,
-        post_id=post_id,
+    #  Create comment
+    db_comment = Comment(
+        content=content.strip(),
         author_id=current_user.id,
-        media_url=media_url
+        post_id=post_id,
+        created_at=datetime.utcnow(),
     )
+
     db.add(db_comment)
     await db.commit()
     await db.refresh(db_comment)
-
-    # Preload relationships before returning
-    query = (
-        select(models.Comment)
-        .where(models.Comment.id == db_comment.id)
-        .options(
-            selectinload(models.Comment.author),
-            selectinload(models.Comment.replies).selectinload(models.Comment.author)
-        )
-    )
-    refreshed_comment = (await db.execute(query)).scalars().first()
-
-    # Optional: notification
-    if post.author_id != current_user.id:
-        notification = models.Notification(
-            user_id=post.author_id,
-            message=f"New comment on your post '{post.title}'",
-            post_id=post.id
-        )
-        db.add(notification)
-        await db.commit()
-
-    return refreshed_comment
+    return db_comment
 
 
+# Get Comments for a Post
 @router.get("/{post_id}", response_model=List[schemas.CommentResponse])
 async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
     post = (await db.execute(select(models.Post).where(models.Post.id == post_id))).scalar_one_or_none()
