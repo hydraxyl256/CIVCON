@@ -222,6 +222,18 @@ async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
 
 
 # List Posts with Comments (with pre-fetching)
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
+from typing import List, Optional
+
+from app.database import get_db
+from app.models import Post, Comment
+from app.schemas import PostResponse, UserBase, PostMediaOut
+
+router = APIRouter()
+
 @router.get("/", response_model=List[PostResponse])
 async def list_posts(
     skip: int = 0,
@@ -230,7 +242,7 @@ async def list_posts(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    List all posts with author, media, likes, and nested comments (pre-fetched).
+    Return all posts with author, media, likes, and nested comments.
     """
 
     stmt = (
@@ -239,12 +251,11 @@ async def list_posts(
             selectinload(Post.author),
             selectinload(Post.media),
             selectinload(Post.votes),
-            #  Load comments + their replies + authors (deep eager loading)
+            selectinload(Post.comments)
+                .selectinload(Comment.author),
             selectinload(Post.comments)
                 .selectinload(Comment.replies)
                 .selectinload(Comment.author),
-            selectinload(Post.comments)
-                .selectinload(Comment.author)
         )
         .offset(skip)
         .limit(limit)
@@ -253,39 +264,52 @@ async def list_posts(
     if district_id:
         stmt = stmt.filter(Post.district_id == district_id)
 
-    try:
-        result = await db.execute(stmt)
-        posts = result.scalars().unique().all()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    result = await db.execute(stmt)
+    posts = result.scalars().unique().all()
 
     def serialize_comment(comment: Comment):
-        """Manual safe serializer that avoids lazy loading inside Pydantic."""
+        """Manual recursive serialization to avoid lazy I/O"""
         return {
             "id": comment.id,
             "content": comment.content,
             "created_at": comment.created_at,
             "updated_at": comment.updated_at,
             "parent_id": comment.parent_id,
-            "author": UserBase.from_orm(comment.author) if comment.author else None,
-            "replies": [serialize_comment(r) for r in getattr(comment, "replies", [])],
+            "author": {
+                "id": comment.author.id,
+                "first_name": comment.author.first_name,
+                "last_name": comment.author.last_name,
+                "username": comment.author.username,
+                "profile_image": comment.author.profile_image,
+            } if comment.author else None,
+            "replies": [
+                serialize_comment(reply)
+                for reply in (comment.replies or [])
+            ],
         }
 
-    return [
-        {
+    serialized_posts = []
+    for p in posts:
+        serialized_posts.append({
             "id": p.id,
             "title": p.title,
             "content": p.content,
-            "author": UserBase.from_orm(p.author) if p.author else None,
+            "author": {
+                "id": p.author.id,
+                "first_name": p.author.first_name,
+                "last_name": p.author.last_name,
+                "username": p.author.username,
+                "profile_image": p.author.profile_image,
+            } if p.author else None,
             "district_id": p.district_id,
             "media": [PostMediaOut.from_orm(m) for m in p.media],
             "created_at": p.created_at,
             "updated_at": p.updated_at,
             "like_count": len(p.votes or []),
-            "comments": [serialize_comment(c) for c in getattr(p, "comments", [])],
-        }
-        for p in posts
-    ]
+            "comments": [serialize_comment(c) for c in (p.comments or [])],
+        })
+
+    return serialized_posts
 
 
 # Like Endpoint
