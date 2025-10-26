@@ -126,56 +126,6 @@ async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-
-# CREATE COMMENT
-@router.post("/{post_id}/comments", response_model=CommentResponse)
-async def create_comment(
-    post_id: int,
-    payload: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    content = payload.get("content")
-    parent_id = payload.get("parent_id")
-
-    if not content or not content.strip():
-        raise HTTPException(status_code=400, detail="Comment content is required.")
-
-    post = (await db.execute(select(Post).where(Post.id == post_id))).scalar_one_or_none()
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-
-    if parent_id:
-        parent_comment = (
-            await db.execute(select(Comment).where(Comment.id == parent_id))
-        ).scalar_one_or_none()
-        if not parent_comment:
-            raise HTTPException(status_code=404, detail="Parent comment not found")
-
-    db_comment = Comment(
-        content=content.strip(),
-        author_id=current_user.id,
-        post_id=post_id,
-        parent_id=parent_id,
-        created_at=datetime.utcnow(),
-    )
-
-    db.add(db_comment)
-    await db.commit()
-    await db.refresh(db_comment, attribute_names=["author"])
-
-    return CommentResponse(
-        id=db_comment.id,
-        content=db_comment.content,
-        author=UserPublic.from_orm(db_comment.author),
-        parent_id=db_comment.parent_id,
-        created_at=db_comment.created_at,
-        updated_at=db_comment.updated_at,
-        replies=[],
-    )
-
-
-
 # LIST POSTS
 @router.get("/", response_model=List[PostResponse])
 async def list_posts(

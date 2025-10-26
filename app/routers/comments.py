@@ -1,99 +1,59 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Body
-from app.routers.oauth2 import get_current_user
-from app.schemas import CommentResponse
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from pathlib import Path
-import uuid
-from app.schemas import PostResponse, PostMediaOut, UserBase 
 from typing import List, Optional
-from .. import models, schemas
-from app.routers import oauth2
-from ..database import get_db
-import cloudinary
-import cloudinary.uploader
-import os
-from app.config import settings
-from app.models import Comment, Post, User
 from datetime import datetime
+from app.database import get_db
+from app.models import User, Post, Comment
+from app.schemas import CommentResponse, CommentCreate, UserPublic
+from .oauth2 import get_current_user
+
+router = APIRouter(prefix="/posts", tags=["Comments"])
 
 
-# Configure Cloudinary
-cloudinary.config(
-    cloud_name=settings.cloudinary_cloud_name,
-    api_key=settings.cloudinary_api_key,
-    api_secret=settings.cloudinary_api_secret,
-)
-
-
-router = APIRouter(
-    prefix="/comments",
-    tags=["Comments"]
-)
-
-# Create Comment for a Post
+#  Create comment
 @router.post("/{post_id}/comments", response_model=CommentResponse)
 async def create_comment(
     post_id: int,
-    payload: dict = Body(...),
+    payload: CommentCreate = Body(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Create a comment or reply under a post.
-    Accepts JSON: { "content": "...", "parent_id": optional }
-    """
-    content = payload.get("content")
-    parent_id = payload.get("parent_id")
-
-    if not content or not content.strip():
-        raise HTTPException(status_code=400, detail="Comment content is required.")
-
-    # Validate post existence
-    post = (await db.execute(select(Post).where(Post.id == post_id))).scalar_one_or_none()
+    post = await db.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    # Validate parent comment (if reply)
-    parent_comment = None
-    if parent_id:
-        parent_comment = (await db.execute(select(Comment).where(Comment.id == parent_id))).scalar_one_or_none()
-        if not parent_comment:
-            raise HTTPException(status_code=404, detail="Parent comment not found")
-
-    # Create comment
     db_comment = Comment(
-        content=content.strip(),
+        content=payload.content.strip(),
         author_id=current_user.id,
         post_id=post_id,
-        parent_id=parent_id,
+        parent_id=payload.parent_id,
         created_at=datetime.utcnow(),
     )
-
     db.add(db_comment)
     await db.commit()
-    await db.refresh(db_comment, attribute_names=["author"])
-
-    return CommentResponse.model_validate(db_comment, from_attributes=True, exclude={"replies"})
-
+    await db.refresh(db_comment)
+    return db_comment
 
 
-# Get Comments for a Post
+#  Get all comments for a post
 @router.get("/{post_id}/comments", response_model=List[CommentResponse])
-async def get_comments(post_id: int, db: AsyncSession = Depends(get_db)):
+async def get_comments(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Fetch all comments for a post, with nested replies.
+    Fetch all comments (and nested replies) for a post.
     """
-    result = await db.execute(
+    stmt = (
         select(Comment)
         .where(Comment.post_id == post_id, Comment.parent_id.is_(None))
         .options(
             selectinload(Comment.author),
-            selectinload(Comment.replies).selectinload(Comment.author),
+            selectinload(Comment.replies).selectinload(Comment.author)
         )
-        .order_by(Comment.created_at.desc())
     )
+    result = await db.execute(stmt)
     comments = result.scalars().unique().all()
     return comments
-
