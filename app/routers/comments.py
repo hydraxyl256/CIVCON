@@ -6,6 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from pathlib import Path
 import uuid
+from app.schemas import PostResponse, PostMediaOut, UserBase 
 from typing import List, Optional
 from .. import models, schemas
 from app.routers import oauth2
