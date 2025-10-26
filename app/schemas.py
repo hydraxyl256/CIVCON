@@ -55,12 +55,12 @@ class UserOut(BaseModel):
     id: int
     first_name: str
     last_name: str
-    username: Optional[str] = None
-    email: EmailStr
+    username: str                     
+    role: Optional[str] = None        
     profile_image: Optional[str] = None
-    role: Role
 
     model_config = {"from_attributes": True}
+
 
 
 
