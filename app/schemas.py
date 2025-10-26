@@ -12,6 +12,8 @@ class Role(str, enum.Enum):
     MP = "mp"
 
 
+
+# USER SCHEMAS
 class UserBase(BaseModel):
     first_name: str
     last_name: str
@@ -51,17 +53,103 @@ class User(UserBase):
     model_config = {"from_attributes": True}
 
 
-class UserOut(BaseModel):
+# 👇 Secure, public-facing version (email omitted automatically)
+class UserPublic(BaseModel):
     id: int
     first_name: str
     last_name: str
-    username: str      
-    email: Optional[EmailStr] = None               
-    role: Optional[str] = None        
+    username: str
+    role: Optional[str] = None
     profile_image: Optional[str] = None
+    district_id: Optional[str] = None
+    county_id: Optional[str] = None
+    occupation: Optional[str] = None
+    bio: Optional[str] = None
+    political_interest: Optional[str] = None
+    community_role: Optional[str] = None
+    interests: List[str] = []
+    region: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
+
+# You can still keep this if some internal endpoints require emails
+class UserOut(UserPublic):
+    email: Optional[EmailStr] = None
+
+
+
+# POST & MEDIA SCHEMAS
+class PostMediaOut(BaseModel):
+    id: int
+    media_url: str
+    media_type: str
+
+    model_config = {"from_attributes": True}
+
+
+class PostCreate(BaseModel):
+    title: str
+    content: str
+    media_url: List[str] = Field(default_factory=list)
+    district_id: Optional[str] = None
+
+
+
+# COMMENT SCHEMAS
+class CommentCreate(BaseModel):
+    content: str
+    post_id: int
+    parent_id: Optional[int] = None
+
+
+class CommentResponse(BaseModel):
+    id: int
+    content: str
+    author: UserPublic  # 👈 safer user version (no email)
+    parent_id: Optional[int]
+    created_at: datetime
+    updated_at: Optional[datetime]
+    replies: List["CommentResponse"] = []
+
+    model_config = {"from_attributes": True}
+
+
+class CommentUpdate(BaseModel):
+    content: Optional[str] = None
+
+
+class Pagination(BaseModel):
+    page: int
+    size: int
+    total: int
+    pages: int
+
+
+class CommentListResponse(BaseModel):
+    data: List[CommentResponse]
+    pagination: Pagination
+
+
+CommentResponse.model_rebuild()  # allows recursive replies
+
+
+
+# POST RESPONSE SCHEMA
+class PostResponse(BaseModel):
+    id: int
+    title: str
+    content: str
+    media: List[PostMediaOut] = []
+    author: UserPublic  # 👈 use the safe, public version
+    district_id: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+    like_count: int
+    comments: List[CommentResponse] = []
+    share_count: Optional[int] = 0
+
+    model_config = {"from_attributes": True}
 
 
 
@@ -73,73 +161,6 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
-
-
-
-# Post & Media Schemas
-class PostMediaOut(BaseModel):
-    id: int
-    media_url: str
-    media_type: str
-    
-
-    model_config = {"from_attributes": True}
-
-
-class PostCreate(BaseModel):
-    title: str
-    content: str
-    media_url: List[str] = Field(default_factory=list)  
-    district_id: Optional[str] = None
-
-class CommentCreate(BaseModel):
-    content: str
-    post_id: int
-    parent_id: Optional[int] = None  
-
-# Forward declare CommentResponse for nesting
-class CommentResponse(BaseModel):
-    id: int
-    content: str
-    author: UserOut
-    parent_id: Optional[int]
-    created_at: datetime
-    updated_at: Optional[datetime]
-    replies: List["CommentResponse"] = []  # nested replies
-
-    model_config = {"from_attributes": True}
-
-class CommentUpdate(BaseModel):
-    content: Optional[str] = None  
-
-
-
-class Pagination(BaseModel):
-    page: int
-    size: int
-    total: int
-    pages: int
-
-class CommentListResponse(BaseModel):
-    data: List[CommentResponse]
-    pagination: Pagination
-
-CommentResponse.model_rebuild()  # Allow recursive nesting
-
-class PostResponse(BaseModel):
-    id: int
-    title: str
-    content: str
-    media: List[PostMediaOut] = []
-    author: UserBase
-    district_id: Optional[str]
-    created_at: datetime
-    updated_at: Optional[datetime]
-    like_count: int
-    comments: List[CommentResponse] = [] 
-    share_count: Optional[int] = 0   
-
-    model_config = {"from_attributes": True}
 
 
 
