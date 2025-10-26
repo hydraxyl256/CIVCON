@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from app.database import get_db
 from app.models import User, Post, Comment, Vote, LiveFeed, PostMedia, Notification
-from app.schemas import PostResponse, PostCreate, CommentResponse, CommentCreate, LiveFeedResponse, LiveFeedCreate, PostMediaOut
+from app.schemas import PostResponse, PostCreate, CommentResponse, CommentCreate, LiveFeedResponse, LiveFeedCreate, PostMediaOut, UserBase
 import logging
 import os
 from .oauth2 import get_current_user
@@ -125,7 +125,7 @@ async def list_posts(
                 id=p.id,
                 title=p.title,
                 content=p.content,
-                author=p.author,  
+                author=UserBase.model_validate(p.author),
                 district_id=p.district_id,
                 media=[PostMediaOut.from_orm(m) for m in p.media],
                 created_at=p.created_at,
