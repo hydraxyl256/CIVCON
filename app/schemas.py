@@ -28,6 +28,8 @@ class UserBase(BaseModel):
     interests: List[str] = Field(default_factory=list)
     privacy_level: str = "public"
 
+    model_config = {"from_attributes": True}
+
 
 class UserCreate(UserBase):
     password: str
@@ -120,6 +122,7 @@ class CommentListResponse(BaseModel):
     data: List[CommentResponse]
     pagination: Pagination
 
+CommentResponse.model_rebuild()  # Allow recursive nesting
 
 class PostResponse(BaseModel):
     id: int
@@ -135,9 +138,6 @@ class PostResponse(BaseModel):
     share_count: Optional[int] = 0   
 
     model_config = {"from_attributes": True}
-
-
-CommentResponse.model_rebuild()  # Allow recursive nesting
 
 
 

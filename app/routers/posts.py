@@ -125,7 +125,7 @@ async def list_posts(
                 id=p.id,
                 title=p.title,
                 content=p.content,
-                author=UserBase.model_validate(p.author),
+                author=p.author,
                 district_id=p.district_id,
                 media=[PostMediaOut.from_orm(m) for m in p.media],
                 created_at=p.created_at,
