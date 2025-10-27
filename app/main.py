@@ -74,7 +74,7 @@ async def create_tables():
 
 @app.get("/")
 def root():
-    return {"message": "Hello, world"}
+    return {"message": "Hello, Welcome to CIVCON API!"}
 
 
 # WebSocket connection manager
@@ -109,17 +109,33 @@ async def websocket_notifications(websocket: WebSocket, token: str = None, db: A
     if not token:
         await websocket.close(code=1008, reason="Missing token")
         return
+
     try:
         current_user = await get_current_user(token=token, db=db)
         await manager.connect(websocket, current_user.id)
-        try:
-            while True:
-                await websocket.receive_text()  # keep connection alive
-        except WebSocketDisconnect:
-            manager.disconnect(current_user.id)
-            await websocket.close()
+        logger.info(f"🔗 User {current_user.id} connected to /ws/notifications")
+
+        while True:
+            try:
+                await websocket.receive_text()  # keep-alive
+            except WebSocketDisconnect:
+                logger.info(f" User {current_user.id} disconnected")
+                manager.disconnect(current_user.id)
+                break  # Exit the while loop cleanly
+
+    except WebSocketDisconnect:
+        # Already handled disconnection — just ensure cleanup
+        manager.disconnect(current_user.id)
+        logger.info(f"User {current_user.id} disconnected abruptly (1006)")
     except Exception as e:
-        await websocket.close(code=1008, reason=str(e))
+        logger.error(f"WebSocket error for user {current_user.id if 'current_user' in locals() else '?'}: {e}")
+        # Try to close only if still open
+        if not websocket.client_state.name == "CLOSED":
+            try:
+                await websocket.close(code=1008, reason=str(e))
+            except Exception:
+                pass
+
 
 
 # WebSocket for direct messaging

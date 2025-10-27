@@ -1,4 +1,3 @@
-# app/routers/live_ws.py
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, status, HTTPException
 from typing import Dict, List
 from sqlalchemy.ext.asyncio import AsyncSession
