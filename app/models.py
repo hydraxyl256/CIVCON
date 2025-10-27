@@ -214,10 +214,13 @@ class LiveFeed(Base):
     content = Column(Text, nullable=False)
     district_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_active = Column(Boolean, default=True)
+
 
     # Relationships
     post = relationship("Post", back_populates="live_feeds")
     journalist = relationship("User")
+
 
 class LiveFeedMessage(Base):
     __tablename__ = "live_feed_messages"
