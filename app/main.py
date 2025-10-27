@@ -9,7 +9,7 @@ from .database import engine, get_db, Base
 from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds
+from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 from .config import settings
@@ -62,6 +62,7 @@ app.include_router(admin.router)
 app.include_router(ussd_router)
 app.include_router(mp.router)
 app.include_router(live_feeds.router)   
+app.include_router(live_ws.router)
 
 
 # Database initialization
@@ -153,3 +154,5 @@ async def websocket_messaging(websocket: WebSocket, user_id: int, token: str = N
             await websocket.close()
     except Exception as e:
         await websocket.close(code=1008, reason=str(e))
+
+
