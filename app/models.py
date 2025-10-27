@@ -242,6 +242,7 @@ class Group(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
     is_active = Column(Boolean, default=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  
+    
 
     # Relationships
     owner = relationship("User", back_populates="owned_groups")  
