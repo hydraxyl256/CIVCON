@@ -218,7 +218,20 @@ class LiveFeed(Base):
     post = relationship("Post", back_populates="live_feeds")
     journalist = relationship("User")
 
+class LiveFeedMessage(Base):
+    __tablename__ = "live_feed_messages"
 
+    id = Column(Integer, primary_key=True, index=True)
+    feed_id = Column(Integer, ForeignKey("live_feeds.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    feed = relationship("LiveFeed", backref="messages")
+    user = relationship("User")
+
+    
 class Group(Base):
     __tablename__ = "groups"
 

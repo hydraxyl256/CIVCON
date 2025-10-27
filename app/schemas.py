@@ -179,6 +179,34 @@ class LiveFeedResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+class LiveFeedMessageUser(BaseModel):
+    id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    profile_image: Optional[str] = None
+
+    class Config:
+        model_config = {"from_attributes": True}
+
+class LiveFeedMessageResponse(BaseModel):
+    id: int
+    feed_id: int
+    user: Optional[LiveFeedMessageUser] = None
+    message: str
+    created_at: datetime
+
+    class Config:
+        model_config = {"from_attributes": True}
+
+
+
+class LiveFeedMessagesList(BaseModel):
+    data: list[LiveFeedMessageResponse]
+    total: int
+    skip: int
+    limit: int
+
 
 # Category & Group Schemas
 class CategoryBase(BaseModel):
