@@ -96,6 +96,7 @@ class User(Base):
     messages_received = relationship("Message", foreign_keys="Message.recipient_id", back_populates="recipient")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     groups = relationship("Group", secondary=group_members, back_populates="members")
+    owned_groups = relationship("Group", back_populates="owner")
     mp = relationship("MP", back_populates="user", uselist=False)
 
 
@@ -240,10 +241,13 @@ class Group(Base):
     description = Column(String, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
     is_active = Column(Boolean, default=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  
 
     # Relationships
-    members = relationship("User", secondary=group_members, back_populates="groups")
+    owner = relationship("User", back_populates="owned_groups")  
+    members = relationship("User", secondary="group_members", back_populates="groups")
     posts = relationship("Post", back_populates="group", cascade="all, delete-orphan")
+
 
 
 class Notification(Base):
