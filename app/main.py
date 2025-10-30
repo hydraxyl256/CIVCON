@@ -29,8 +29,11 @@ app = FastAPI(
 )
 
 origins = [
-    "https://civ-con-sh2j.vercel.app",  #  frontend on vercel
-    "http://localhost:5173",             #  for local dev if using Vite/React
+    "https://civ-con-sh2j.vercel.app", 
+    "https://civ-con-front.vercel.app/",
+    "http://localhost:5173",
+    "https://civ-con.org",       
+    "https://app.civ-con.org", 
 ]
 
 
