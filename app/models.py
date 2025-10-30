@@ -98,6 +98,7 @@ class User(Base):
     groups = relationship("Group", secondary=group_members, back_populates="members")
     owned_groups = relationship("Group", back_populates="owner")
     mp = relationship("MP", back_populates="user", uselist=False)
+    articles = relationship("Article", back_populates="author")
 
 
 class Post(Base):
