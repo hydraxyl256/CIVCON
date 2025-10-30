@@ -346,7 +346,7 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
         {"sub": email, "scope": "password_reset"},
         expires_delta=timedelta(minutes=30)
     )
-    reset_link = f"{os.getenv('FRONTEND_URL', 'https://civ-con-sh2j.vercel.app/')}/reset-password?token={reset_token}"
+    reset_link = f"{os.getenv('FRONTEND_URL', 'https://app.civ-con.org')}/reset-password?token={reset_token}"
 
     await send_reset_email(email, reset_link)
 
