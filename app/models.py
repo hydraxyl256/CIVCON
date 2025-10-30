@@ -294,5 +294,19 @@ class UssdSession(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     
+class Article(Base):
+    __tablename__ = "articles"
 
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=True)
+    content = Column(Text, nullable=True)
+    category = Column(String(100), nullable=True)
+    image = Column(String(255), nullable=True)
+    tags = Column(JSON, default=list)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    read_time = Column(String(50), default="5 min read")
+    published_at = Column(DateTime, default=datetime.utcnow)
+
+    author = relationship("User", back_populates="articles")
 

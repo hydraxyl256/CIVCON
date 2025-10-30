@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body, Request, Query
 from fastapi.responses import RedirectResponse
 import os
 import asyncio
@@ -25,6 +25,7 @@ import logging
 import requests
 from pydantic import BaseModel 
 from app.schemas import Location, ForgotPasswordRequest
+
 
 
 
@@ -519,3 +520,24 @@ async def linkedin_callback(request: Request, db: AsyncSession = Depends(get_db)
     #  Auto redirect to frontend homepage with token
     redirect_url = f"{settings.frontend_url}/?token={jwt_token}"
     return RedirectResponse(url=redirect_url)
+
+
+
+@router.get("/check-username")
+async def check_username(
+    username: str = Query(..., min_length=3, max_length=30),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+     Asynchronously checks if a username is already taken.
+    Returns:
+        {"available": True} if username is free
+        {"available": False} if it's already taken
+    """
+    username = username.strip().lower()
+
+    stmt = select(User).where(User.username == username)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    return {"available": user is None}

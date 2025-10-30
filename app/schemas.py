@@ -390,3 +390,35 @@ class Location(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+
+
+class AuthorOut(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+
+    class Config:
+        model_config = {"from_attributes": True}
+
+class ArticleBase(BaseModel):
+    title: str
+    summary: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    image: Optional[str] = None
+    tags: List[str] = []
+    read_time: Optional[str] = "5 min read"
+
+class ArticleCreate(ArticleBase):
+    author_id: int
+
+class ArticleUpdate(ArticleBase):
+    pass
+
+class ArticleOut(ArticleBase):
+    id: int
+    author: Optional[AuthorOut]
+    published_at: datetime
+
+    class Config:
+        model_config = {"from_attributes": True}
