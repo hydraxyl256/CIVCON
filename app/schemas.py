@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, computed_field
 from typing import Optional, List
 from datetime import datetime
 import enum
@@ -391,17 +391,26 @@ class Location(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
-# Author Schemas
+# Author Schemas 
 class AuthorOut(BaseModel):
     id: int
-    name: str
-    avatar: Optional[str] = None
+    username: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    profile_image: Optional[str] = None
+
+    @computed_field
+    @property
+    def name(self) -> str:
+        if self.first_name or self.last_name:
+            return f"{self.first_name or ''} {self.last_name or ''}".strip()
+        return self.username
 
     class Config:
         from_attributes = True
 
 
-# Article Schemas
+#  Article Schemas 
 class ArticleBase(BaseModel):
     title: str
     summary: Optional[str] = None
