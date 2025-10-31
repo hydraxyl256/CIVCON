@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -19,62 +19,64 @@ async def get_articles(
     limit: int = 9,
     category: Optional[str] = None,
     tag: Optional[str] = None,
-    search: Optional[str] = Query(None, description="Search by title, summary, or content"),
-    lang: Optional[str] = "english",  # optional language for ts vector (default english)
+    search: Optional[str] = None,
+    sort: Optional[str] = "latest",  # latest | oldest | relevance
 ):
     """
-    Supports:
-      - pagination (skip, limit)
-      - filters (category, tag)
-      - PostgreSQL full-text search (search) with ranking
+    Get paginated, searchable, sortable articles.
+    Supports category, tag, and full-text search with rank ordering.
     """
 
-    base_select = select(Article).options(selectinload(Article.author))
+    # Build base query
+    query = select(Article).options(selectinload(Article.author))
 
-    # If search param provided -> use full-text search with ranking
-    if search and search.strip():
-        # build a concatenated text vector: title (higher weight), summary, content
-        # weight title as 'A', summary 'B', content 'C' for ranking preference
-        tsv_title = func.setweight(func.to_tsvector(lang, func.coalesce(Article.title, "")), 'A')
-        tsv_summary = func.setweight(func.to_tsvector(lang, func.coalesce(Article.summary, "")), 'B')
-        tsv_content = func.setweight(func.to_tsvector(lang, func.coalesce(Article.content, "")), 'C')
+    # Filtering
+    if category:
+        query = query.where(Article.category.ilike(f"%{category}%"))
+    if tag:
+        query = query.where(Article.tags.contains([tag]))
 
-        # combined tsvector
-        combined_tsv = tsv_title.op('||')(tsv_summary).op('||')(tsv_content)
-
-        # plainto_tsquery for user search string
-        query_ts = func.plainto_tsquery(lang, func.coalesce(search, ''))
-
-        # ranking function
-        rank = func.ts_rank_cd(combined_tsv, query_ts)
-
-        # base query that returns only matching rows, ordered by rank desc then published_at
-        stmt = (
-            select(Article, rank.label("search_rank"))
-            .where(combined_tsv.op('@@')(query_ts))
-            .options(selectinload(Article.author))
-            .order_by(func.coalesce(func.nullif(rank, None), 0).desc(), Article.published_at.desc())
-            .offset(skip)
-            .limit(limit)
+    # Full-text search vector
+    if search:
+        # Build weighted tsvector
+        tsvector = (
+            func.setweight(func.to_tsvector("english", func.coalesce(Article.title, "")), "A")
+            + func.setweight(func.to_tsvector("english", func.coalesce(Article.summary, "")), "B")
+            + func.setweight(func.to_tsvector("english", func.coalesce(Article.content, "")), "C")
         )
 
-        result = await db.execute(stmt)
-        rows = result.all()  # list of (Article, rank)
-        articles = [row[0] for row in rows]
-        return articles
+        tsquery = func.plainto_tsquery("english", search)
+        rank = func.ts_rank_cd(tsvector, tsquery).label("rank")
 
-    # else: regular (no-search) query: apply filters and order by published_at desc
-    stmt = (
-        base_select.order_by(Article.published_at.desc()).offset(skip).limit(limit)
-    )
+        # Filter and rank by match
+        query = (
+            query.add_columns(rank)
+            .where(tsvector.op("@@")(tsquery))
+        )
 
-    if category:
-        stmt = stmt.where(Article.category.ilike(f"%{category}%"))
-    if tag:
-        stmt = stmt.where(Article.tags.contains([tag]))
+        if sort == "relevance":
+            query = query.order_by(desc(rank))
+        else:
+            query = query.order_by(desc(Article.published_at))
+    else:
+        # Regular ordering when no search term
+        if sort == "oldest":
+            query = query.order_by(asc(Article.published_at))
+        else:
+            query = query.order_by(desc(Article.published_at))
 
-    result = await db.execute(stmt)
-    articles = result.scalars().all()
+    # Pagination
+    query = query.offset(skip).limit(limit)
+
+    # Execute
+    result = await db.execute(query)
+
+    # If search used rank, the result includes tuples (Article, rank)
+    if search:
+        articles = [row[0] for row in result.all()]
+    else:
+        articles = result.scalars().all()
+
     return articles
 
 #  GET /articles/{id}
