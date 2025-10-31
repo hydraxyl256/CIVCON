@@ -309,5 +309,11 @@ class Article(Base):
     read_time = Column(String(50), default="5 min read")
     published_at = Column(DateTime, default=datetime.utcnow)
 
-    author = relationship("User", back_populates="articles")
+    
+    author = relationship(
+        "User",
+        back_populates="articles",
+        lazy="selectin",       
+        passive_deletes=True,  
+    )
 
