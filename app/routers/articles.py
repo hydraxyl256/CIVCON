@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -20,37 +20,62 @@ async def get_articles(
     category: Optional[str] = None,
     tag: Optional[str] = None,
     search: Optional[str] = Query(None, description="Search by title, summary, or content"),
+    lang: Optional[str] = "english",  # optional language for ts vector (default english)
 ):
-    query = (
-        select(Article)
-        .options(selectinload(Article.author))
-        .order_by(Article.id.desc())
-        .offset(skip)
-        .limit(limit)
-    )
+    """
+    Supports:
+      - pagination (skip, limit)
+      - filters (category, tag)
+      - PostgreSQL full-text search (search) with ranking
+    """
 
-    #  Filter by category
-    if category:
-        query = query.where(Article.category.ilike(f"%{category}%"))
+    base_select = select(Article).options(selectinload(Article.author))
 
-    #  Filter by tag
-    if tag:
-        query = query.where(Article.tags.contains([tag]))
+    # If search param provided -> use full-text search with ranking
+    if search and search.strip():
+        # build a concatenated text vector: title (higher weight), summary, content
+        # weight title as 'A', summary 'B', content 'C' for ranking preference
+        tsv_title = func.setweight(func.to_tsvector(lang, func.coalesce(Article.title, "")), 'A')
+        tsv_summary = func.setweight(func.to_tsvector(lang, func.coalesce(Article.summary, "")), 'B')
+        tsv_content = func.setweight(func.to_tsvector(lang, func.coalesce(Article.content, "")), 'C')
 
-    #  search support
-    if search:
-        query = query.where(
-            or_(
-                Article.title.ilike(f"%{search}%"),
-                Article.summary.ilike(f"%{search}%"),
-                Article.content.ilike(f"%{search}%"),
-            )
+        # combined tsvector
+        combined_tsv = tsv_title.op('||')(tsv_summary).op('||')(tsv_content)
+
+        # plainto_tsquery for user search string
+        query_ts = func.plainto_tsquery(lang, func.coalesce(search, ''))
+
+        # ranking function
+        rank = func.ts_rank_cd(combined_tsv, query_ts)
+
+        # base query that returns only matching rows, ordered by rank desc then published_at
+        stmt = (
+            select(Article, rank.label("search_rank"))
+            .where(combined_tsv.op('@@')(query_ts))
+            .options(selectinload(Article.author))
+            .order_by(func.coalesce(func.nullif(rank, None), 0).desc(), Article.published_at.desc())
+            .offset(skip)
+            .limit(limit)
         )
 
-    result = await db.execute(query)
+        result = await db.execute(stmt)
+        rows = result.all()  # list of (Article, rank)
+        articles = [row[0] for row in rows]
+        return articles
+
+    # else: regular (no-search) query: apply filters and order by published_at desc
+    stmt = (
+        base_select.order_by(Article.published_at.desc()).offset(skip).limit(limit)
+    )
+
+    if category:
+        stmt = stmt.where(Article.category.ilike(f"%{category}%"))
+    if tag:
+        stmt = stmt.where(Article.tags.contains([tag]))
+
+    result = await db.execute(stmt)
     articles = result.scalars().all()
     return articles
-
 
 #  GET /articles/{id}
 @router.get("/{id}", response_model=ArticleOut)
