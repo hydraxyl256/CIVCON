@@ -391,15 +391,17 @@ class Location(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
-
+# Author Schemas
 class AuthorOut(BaseModel):
     id: int
     name: str
     avatar: Optional[str] = None
 
     class Config:
-        model_config = {"from_attributes": True}
+        from_attributes = True
 
+
+# Article Schemas
 class ArticleBase(BaseModel):
     title: str
     summary: Optional[str] = None
@@ -409,11 +411,14 @@ class ArticleBase(BaseModel):
     tags: List[str] = []
     read_time: Optional[str] = "5 min read"
 
+
 class ArticleCreate(ArticleBase):
     author_id: int
 
+
 class ArticleUpdate(ArticleBase):
     pass
+
 
 class ArticleOut(ArticleBase):
     id: int
@@ -421,4 +426,4 @@ class ArticleOut(ArticleBase):
     published_at: datetime
 
     class Config:
-        model_config = {"from_attributes": True}
+        from_attributes = True
