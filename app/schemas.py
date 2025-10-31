@@ -418,7 +418,8 @@ class ArticleBase(BaseModel):
     category: Optional[str] = None
     image: Optional[str] = None
     tags: List[str] = []
-    read_time: Optional[str] = "5 min read"
+    read_time: Optional[str] = "2 min read"
+    is_featured: Optional[bool] = False
 
 
 class ArticleCreate(ArticleBase):

@@ -309,7 +309,7 @@ class Article(Base):
     read_time = Column(String(50), default="5 min read")
     published_at = Column(DateTime, default=datetime.utcnow)
 
-    
+    is_featured = Column(Boolean, default=False)    
     author = relationship(
         "User",
         back_populates="articles",

@@ -10,7 +10,7 @@ from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
 
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
-# ✅ GET /articles
+#  GET /articles
 @router.get("/", response_model=List[ArticleOut])
 async def get_articles(
     db: AsyncSession = Depends(get_db),
@@ -21,7 +21,7 @@ async def get_articles(
 ):
     query = (
         select(Article)
-        .options(selectinload(Article.author))  # ✅ preload author
+        .options(selectinload(Article.author))  
         .offset(skip)
         .limit(limit)
         .order_by(Article.id.desc())
@@ -37,7 +37,7 @@ async def get_articles(
     return articles
 
 
-# ✅ GET /articles/{id}
+#  GET /articles/{id}
 @router.get("/{id}", response_model=ArticleOut)
 async def get_article(id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -51,7 +51,7 @@ async def get_article(id: int, db: AsyncSession = Depends(get_db)):
     return article
 
 
-# ✅ POST /articles
+#  POST /articles
 @router.post("/", response_model=ArticleOut, status_code=status.HTTP_201_CREATED)
 async def create_article(article_data: ArticleCreate, db: AsyncSession = Depends(get_db)):
     new_article = Article(**article_data.dict())
@@ -59,7 +59,7 @@ async def create_article(article_data: ArticleCreate, db: AsyncSession = Depends
     await db.commit()
     await db.refresh(new_article)
 
-    # ✅ Re-fetch with author preloaded to avoid MissingGreenlet
+    #  Re-fetch with author preloaded to avoid MissingGreenlet
     result = await db.execute(
         select(Article)
         .options(selectinload(Article.author))
@@ -69,7 +69,7 @@ async def create_article(article_data: ArticleCreate, db: AsyncSession = Depends
     return article_with_author
 
 
-# ✅ PUT /articles/{id}
+#  PUT /articles/{id}
 @router.put("/{id}", response_model=ArticleOut)
 async def update_article(
     id: int,
@@ -87,7 +87,7 @@ async def update_article(
     await db.commit()
     await db.refresh(article)
 
-    # ✅ preload author for response
+    #  preload author for response
     result = await db.execute(
         select(Article)
         .options(selectinload(Article.author))
@@ -96,7 +96,7 @@ async def update_article(
     return result.scalar_one_or_none()
 
 
-# ✅ DELETE /articles/{id}
+#  DELETE /articles/{id}
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_article(id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Article).where(Article.id == id))
