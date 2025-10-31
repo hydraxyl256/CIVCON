@@ -440,3 +440,24 @@ class SearchResponse(BaseModel):
     articles: List[ArticleOut] = []
 
     model_config = {"from_attributes": True}
+
+# Topic Schemas
+
+class TopicBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+
+class TopicCreate(TopicBase):
+    pass
+
+class TopicUpdate(TopicBase):
+    pass
+
+class TopicOut(TopicBase):
+    id: int
+    posts: Optional[int] = 0
+    trending: Optional[bool] = False
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
