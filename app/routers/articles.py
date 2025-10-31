@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -10,7 +11,7 @@ from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
 
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
-#  GET /articles
+#  GET /articles (with search, category, tag filters)
 @router.get("/", response_model=List[ArticleOut])
 async def get_articles(
     db: AsyncSession = Depends(get_db),
@@ -18,19 +19,33 @@ async def get_articles(
     limit: int = 9,
     category: Optional[str] = None,
     tag: Optional[str] = None,
+    search: Optional[str] = Query(None, description="Search by title, summary, or content"),
 ):
     query = (
         select(Article)
-        .options(selectinload(Article.author))  
+        .options(selectinload(Article.author))
+        .order_by(Article.id.desc())
         .offset(skip)
         .limit(limit)
-        .order_by(Article.id.desc())
     )
 
+    #  Filter by category
     if category:
         query = query.where(Article.category.ilike(f"%{category}%"))
+
+    #  Filter by tag
     if tag:
         query = query.where(Article.tags.contains([tag]))
+
+    #  search support
+    if search:
+        query = query.where(
+            or_(
+                Article.title.ilike(f"%{search}%"),
+                Article.summary.ilike(f"%{search}%"),
+                Article.content.ilike(f"%{search}%"),
+            )
+        )
 
     result = await db.execute(query)
     articles = result.scalars().all()
