@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.models import Article
 from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
@@ -9,11 +9,24 @@ from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
 # GET /articles
-@router.get("/", response_model=List[ArticleOut])
-async def get_articles(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Article))
-    articles = result.scalars().all()
-    return articles
+@router.get("/")
+async def get_articles(
+    db: AsyncSession = Depends(get_db),
+    skip: int = 0,
+    limit: int = 9,
+    category: Optional[str] = None,
+    tag: Optional[str] = None,
+):
+    query = select(Article)
+    if category:
+        query = query.where(Article.category.ilike(f"%{category}%"))
+    if tag:
+        query = query.where(Article.tags.contains([tag]))
+
+    query = query.offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
 
 # GET /articles/{id}
 @router.get("/{id}", response_model=ArticleOut)
