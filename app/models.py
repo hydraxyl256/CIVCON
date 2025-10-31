@@ -310,6 +310,7 @@ class Article(Base):
     published_at = Column(DateTime, default=datetime.utcnow)
 
     is_featured = Column(Boolean, default=False)    
+    tsv_document = Column(Text, nullable=True)
     author = relationship(
         "User",
         back_populates="articles",

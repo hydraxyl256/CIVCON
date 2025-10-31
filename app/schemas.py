@@ -300,12 +300,6 @@ class VoteResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-class SearchResponse(BaseModel):
-    users: List[UserOut] = []
-    posts: List[PostResponse] = []
-    comments: List[CommentResponse] = []
-
-    model_config = {"from_attributes": True}
 
 
 class MessageBase(BaseModel):
@@ -437,3 +431,12 @@ class ArticleOut(ArticleBase):
 
     class Config:
         from_attributes = True
+
+
+class SearchResponse(BaseModel):
+    users: List[UserOut] = []
+    posts: List[PostResponse] = []
+    comments: List[CommentResponse] = []
+    articles: List[ArticleOut] = []
+
+    model_config = {"from_attributes": True}
