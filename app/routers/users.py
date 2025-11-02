@@ -37,18 +37,6 @@ ALGORITHM = settings.algorithm
 router = APIRouter(prefix="/users", tags=["users"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-followers = relationship(
-    "Follower",
-    foreign_keys="Follower.followed_id",
-    back_populates="followed",
-    cascade="all, delete-orphan"
-)
-following = relationship(
-    "Follower",
-    foreign_keys="Follower.follower_id",
-    back_populates="follower",
-    cascade="all, delete-orphan"
-)
 
 # Get logged-in user's profile
 @router.get("/me", response_model=UserResponse)
@@ -226,9 +214,10 @@ async def list_users(
      Public endpoint to list users
     - Supports search (case-insensitive)
     - Supports region filter
-    - Adds verified + real followers_count
+    - Adds verified badge + follower count
+    - Safely handles null interests
     """
-    from app.models import Follower  # import here to avoid circular imports
+    from app.models import Follower  # avoid circular import
 
     stmt = select(models.User)
 
@@ -236,30 +225,36 @@ async def list_users(
         stmt = stmt.where(func.lower(models.User.username).like(f"%{search.lower()}%"))
 
     if region:
-        stmt = stmt.where(models.User.region.ilike(region))
+        stmt = stmt.where(func.lower(models.User.region) == region.lower())
 
     stmt = stmt.order_by(models.User.id.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     users = result.scalars().all()
 
-    verified_roles = {"leader", "politician", "journalist"}
+    verified_roles = {"MP", "politician", "journalist"}
     users_out = []
 
     for user in users:
-        #  Verified
+        #  Ensure no crash on NULL interests
+        if not user.interests:
+            user.interests = []
+
+        #  Verified logic
         is_verified = user.role and user.role.strip().lower() in verified_roles
 
-        #  Real follower count
+        #  Followers count
         followers_count = await db.scalar(
             select(func.count()).where(Follower.followed_id == user.id)
         )
 
+        #  Validate through schema
         user_data = schemas.UserPublic.model_validate(user)
         user_data.verified = is_verified
         user_data.followers_count = followers_count or 0
         users_out.append(user_data)
 
     return users_out
+
 
 
 # Get logged-in user's following list
