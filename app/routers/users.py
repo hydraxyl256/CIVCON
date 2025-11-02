@@ -214,10 +214,10 @@ async def list_users(
      Public endpoint to list users
     - Supports search (case-insensitive)
     - Supports region filter
-    - Adds verified badge + follower count
-    - Safely handles null interests
+    - Adds verified flag + real follower count
+    - Prevents MissingGreenlet errors
+    - Fully async-safe
     """
-    from app.models import Follower  # avoid circular import
 
     stmt = select(models.User)
 
@@ -231,29 +231,45 @@ async def list_users(
     result = await db.execute(stmt)
     users = result.scalars().all()
 
-    verified_roles = {"MP", "politician", "journalist"}
+    verified_roles = {"mp", "politician", "journalist"}
     users_out = []
 
     for user in users:
-        #  Ensure no crash on NULL interests
-        if not user.interests:
-            user.interests = []
+        #  Ensure interests is always a list
+        interests = user.interests or []
 
         #  Verified logic
-        is_verified = user.role and user.role.strip().lower() in verified_roles
+        is_verified = bool(user.role and user.role.strip().lower() in verified_roles)
 
-        #  Followers count
+        #  Followers count (safe async scalar query)
         followers_count = await db.scalar(
             select(func.count()).where(Follower.followed_id == user.id)
-        )
+        ) or 0
 
-        #  Validate through schema
-        user_data = schemas.UserPublic.model_validate(user)
-        user_data.verified = is_verified
-        user_data.followers_count = followers_count or 0
-        users_out.append(user_data)
+        #  Manual Pydantic-safe serialization (prevents MissingGreenlet)
+        user_dict = {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "username": user.username,
+            "role": user.role,
+            "profile_image": user.profile_image,
+            "district_id": user.district_id,
+            "county_id": user.county_id,
+            "occupation": user.occupation,
+            "bio": user.bio,
+            "political_interest": user.political_interest,
+            "community_role": user.community_role,
+            "interests": interests,
+            "region": user.region,
+            "verified": is_verified,
+            "followers_count": followers_count,
+        }
+
+        users_out.append(schemas.UserPublic(**user_dict))
 
     return users_out
+
 
 
 
