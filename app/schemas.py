@@ -67,7 +67,7 @@ class UserPublic(BaseModel):
     bio: Optional[str] = None
     political_interest: Optional[str] = None
     community_role: Optional[str] = None
-    interests: List[str] = []
+    interests: List[str] = Field(default_factory=list)
     region: Optional[str] = None
     verified: bool = False
     followers_count: Optional[int] = 0
@@ -476,7 +476,7 @@ class TopicOut(TopicBase):
 
     model_config = {"from_attributes": True}
 
-    
+
 class MutualInterestsResponse(BaseModel):
     user_id: int
     username: str
