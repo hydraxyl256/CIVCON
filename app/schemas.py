@@ -441,6 +441,18 @@ class SearchResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+
+class SearchItem(BaseModel):
+    id: int
+    type: str                  
+    title: Optional[str] = None  
+    name: Optional[str] = None   
+    snippet: Optional[str] = None  
+    image: Optional[str] = None
+    category: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
 # Topic Schemas
 
 class TopicBase(BaseModel):
