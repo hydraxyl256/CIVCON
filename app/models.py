@@ -20,6 +20,7 @@ from datetime import datetime
 
 
 
+
 # ENUMS
 class Role(str, enum.Enum):
     CITIZEN = "citizen"
@@ -81,6 +82,7 @@ class User(Base):
     community_role = Column(String, nullable=True)
     interests = Column(JSON, nullable=True)
     privacy_level = Column(String, default="public")
+    search_vector = Column(TSVectorType("username", "first_name", "last_name", "bio"))
 
     # Social logins
     google_id = Column(String, unique=True, nullable=True)
@@ -216,7 +218,7 @@ class LiveFeed(Base):
     district_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
-
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     post = relationship("Post", back_populates="live_feeds")
@@ -246,6 +248,7 @@ class Group(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
     is_active = Column(Boolean, default=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  
+    search_vector = Column(TSVectorType("title", "summary", "content"))
     
 
     # Relationships
@@ -277,6 +280,8 @@ class Category(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
     description = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     posts = relationship("Post", secondary=post_categories, back_populates="categories")
@@ -308,6 +313,7 @@ class Article(Base):
     author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     read_time = Column(String(50), default="5 min read")
     published_at = Column(DateTime, default=datetime.utcnow)
+    search_vector = Column(TSVectorType("title", "summary", "content"))
 
     is_featured = Column(Boolean, default=False)    
     tsv_document = Column(Text, nullable=True)
@@ -329,3 +335,4 @@ class Topic(Base):
     posts = Column(Integer, default=0)
     trending = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    search_vector = Column(TSVectorType("title", "summary", "content"))
