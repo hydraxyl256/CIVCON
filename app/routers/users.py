@@ -197,3 +197,30 @@ async def delete_account(
         logger.exception("Error deleting account")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+# List users with search and region filter  
+@router.get("/", response_model=list[schemas.UserPublic])
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    skip: int = 0,
+    limit: int = 20,
+    search: str = "",
+    region: str = "",
+):
+    """
+     Public endpoint to list users
+    - Supports search (case-insensitive)
+    - Supports region filter
+    """
+    stmt = select(models.User)
+
+    if search:
+        stmt = stmt.where(func.lower(models.User.username).like(f"%{search.lower()}%"))
+
+    if region:
+        stmt = stmt.where(models.User.region.ilike(region))
+
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    return users
