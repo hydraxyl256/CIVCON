@@ -18,6 +18,8 @@ from app.routers.oauth2 import get_current_user
 from app.routers.auth import upload_to_cloudinary
 from app.schemas import  UserResponse, UserUpdate
 import cloudinary.uploader
+from app import models, schemas
+from sqlalchemy import func
 from app.schemas import UserOut
 from app.models import Post, Comment, Vote
 from sqlalchemy import delete
@@ -34,7 +36,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
-
+# Get logged-in user's profile
 @router.get("/me", response_model=UserResponse)
 async def get_profile(
     current_user: User = Depends(get_current_user),
@@ -52,7 +54,46 @@ async def get_profile(
     return user
 
 
+# Get public user profile by ID
+@router.get("/{user_id}", response_model=schemas.UserPublic)
+async def get_public_user_profile(user_id: int, db: AsyncSession = Depends(get_db)):
+    """
+     Fetch a public user's profile by ID.
+    Does not expose sensitive fields like email or password.
+    """
+    stmt = select(models.User).where(models.User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
 
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user
+
+# Get user by username
+@router.get("/by-username/{username}", response_model=schemas.UserPublic)
+async def get_user_by_username(username: str, db: AsyncSession = Depends(get_db)):
+    """
+     Get a user's public profile by username (case-insensitive).
+    - Returns only public fields.
+    - Safe for public display.
+    """
+    stmt = (
+        select(models.User)
+        .where(func.lower(models.User.username) == func.lower(username))
+        .limit(1)
+    )
+
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user
+
+
+# Update logged-in user's profile
 @router.put("/profile", response_model=UserOut)
 async def update_user_profile(
     first_name: str = Form(None),
