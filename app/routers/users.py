@@ -76,23 +76,36 @@ async def get_public_user_profile(user_id: int, db: AsyncSession = Depends(get_d
 @router.get("/by-username/{username}", response_model=schemas.UserPublic)
 async def get_user_by_username(username: str, db: AsyncSession = Depends(get_db)):
     """
-     Get a user's public profile by username (case-insensitive).
-    - Returns only public fields.
-    - Safe for public display.
+    Get a user's public profile by username (case-insensitive).
+    Includes verification and followers count.
     """
+    from app.models import Follower
+
     stmt = (
         select(models.User)
         .where(func.lower(models.User.username) == func.lower(username))
         .limit(1)
     )
-
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    return user
+    #  Compute verification and followers_count
+    verified_roles = {"leader", "politician", "journalist"}
+    is_verified = user.role and user.role.strip().lower() in verified_roles
+
+    followers_count = await db.scalar(
+        select(func.count()).where(Follower.followed_id == user.id)
+    )
+
+    user_data = schemas.UserPublic.model_validate(user)
+    user_data.verified = is_verified
+    user_data.followers_count = followers_count or 0
+
+    return user_data
+
 
 
 # Update logged-in user's profile
@@ -231,7 +244,7 @@ async def list_users(
     result = await db.execute(stmt)
     users = result.scalars().all()
 
-    verified_roles = {"mp", "politician", "journalist"}
+    verified_roles = {"mp", "Admin", "journalist"}
     users_out = []
 
     for user in users:
