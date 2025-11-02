@@ -10,6 +10,7 @@ from sqlalchemy import (
     Enum,
     TIMESTAMP,
     Table,
+    UniqueConstraint,
 )
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship
@@ -336,3 +337,16 @@ class Topic(Base):
     trending = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     search_vector = Column(TSVectorType("title", "summary", "content"))
+
+
+class Follower(Base):
+    __tablename__ = "followers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    follower_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    followed_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("follower_id", "followed_id", name="unique_follow"),)
+
+    follower = relationship("User", foreign_keys=[follower_id], back_populates="following")
+    followed = relationship("User", foreign_keys=[followed_id], back_populates="followers")

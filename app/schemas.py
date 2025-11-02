@@ -69,6 +69,8 @@ class UserPublic(BaseModel):
     community_role: Optional[str] = None
     interests: List[str] = []
     region: Optional[str] = None
+    verified: bool = False
+    followers_count: Optional[int] = 0
 
     model_config = {"from_attributes": True}
 

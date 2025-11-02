@@ -23,6 +23,7 @@ from sqlalchemy import func
 from app.schemas import UserOut
 from app.models import Post, Comment, Vote
 from sqlalchemy import delete
+from sqlalchemy.orm import relationship
 
 
 
@@ -35,6 +36,18 @@ ALGORITHM = settings.algorithm
 router = APIRouter(prefix="/users", tags=["users"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
+followers = relationship(
+    "Follower",
+    foreign_keys="Follower.followed_id",
+    back_populates="followed",
+    cascade="all, delete-orphan"
+)
+following = relationship(
+    "Follower",
+    foreign_keys="Follower.follower_id",
+    back_populates="follower",
+    cascade="all, delete-orphan"
+)
 
 # Get logged-in user's profile
 @router.get("/me", response_model=UserResponse)
@@ -190,7 +203,7 @@ async def delete_account(
         await db.execute(delete(User).where(User.id == current_user.id))
         await db.commit()
 
-        logger.info(f"💀 User {current_user.email} deleted successfully.")
+        logger.info(f" User {current_user.email} deleted successfully.")
         return {"message": "Your account and all data have been permanently deleted."}
 
     except Exception as e:
@@ -198,7 +211,8 @@ async def delete_account(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# List users with search and region filter  
+
+# List users with search and region filter
 @router.get("/", response_model=list[schemas.UserPublic])
 async def list_users(
     db: AsyncSession = Depends(get_db),
@@ -211,7 +225,10 @@ async def list_users(
      Public endpoint to list users
     - Supports search (case-insensitive)
     - Supports region filter
+    - Adds verified + real followers_count
     """
+    from app.models import Follower  # import here to avoid circular imports
+
     stmt = select(models.User)
 
     if search:
@@ -220,7 +237,41 @@ async def list_users(
     if region:
         stmt = stmt.where(models.User.region.ilike(region))
 
-    stmt = stmt.offset(skip).limit(limit)
+    stmt = stmt.order_by(models.User.id.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     users = result.scalars().all()
-    return users
+
+    verified_roles = {"leader", "politician", "journalist"}
+    users_out = []
+
+    for user in users:
+        #  Verified
+        is_verified = user.role and user.role.strip().lower() in verified_roles
+
+        #  Real follower count
+        followers_count = await db.scalar(
+            select(func.count()).where(Follower.followed_id == user.id)
+        )
+
+        user_data = schemas.UserPublic.model_validate(user)
+        user_data.verified = is_verified
+        user_data.followers_count = followers_count or 0
+        users_out.append(user_data)
+
+    return users_out
+
+
+# Get logged-in user's following list
+@router.get("/me/following", response_model=list[schemas.UserPublic])
+async def get_my_following(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    from app.models import Follower
+    stmt = (
+        select(models.User)
+        .join(Follower, Follower.followed_id == models.User.id)
+        .where(Follower.follower_id == current_user.id)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
