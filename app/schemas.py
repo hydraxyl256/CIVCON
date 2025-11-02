@@ -475,3 +475,9 @@ class TopicOut(TopicBase):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+    
+class MutualInterestsResponse(BaseModel):
+    user_id: int
+    username: str
+    mutual_interests: List[str]

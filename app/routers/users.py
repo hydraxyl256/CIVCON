@@ -20,12 +20,12 @@ from app.schemas import  UserResponse, UserUpdate
 import cloudinary.uploader
 from app import models, schemas
 from sqlalchemy import func
-from app.schemas import UserOut
+from app.schemas import UserOut, MutualInterestsResponse
 from app.models import Post, Comment, Vote
 from sqlalchemy import delete
 from sqlalchemy.orm import relationship
 from app.models import Follower
-
+from typing import List
 
 
 logging.basicConfig(level=logging.INFO)
@@ -353,3 +353,54 @@ async def get_mutual_followers(
 
     return mutual_users
 
+
+# Get Mutual Interest
+@router.get("/{user_id}/mutual-interests", response_model=MutualInterestsResponse)
+async def get_mutual_interests(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+     Get mutual interests between the current user and another user.
+    Compares:
+    - political_interest
+    - occupation
+    - community_role
+    - region
+    - interests (list[str])
+    """
+
+    #  Prevent self-check
+    if user_id == current_user.id:
+        return []
+
+    # Fetch target user
+    result = await db.execute(select(models.User).where(models.User.id == user_id))
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    mutuals: list[str] = []
+
+    # Compare simple string attributes
+    fields_to_compare = [
+        "political_interest",
+        "occupation",
+        "community_role",
+        "region",
+    ]
+
+    for field in fields_to_compare:
+        curr_val = getattr(current_user, field, None)
+        target_val = getattr(target_user, field, None)
+        if curr_val and target_val and curr_val.lower() == target_val.lower():
+            mutuals.append(f"{field.replace('_', ' ').title()}: {curr_val}")
+
+    # Compare list-type interests if both users have them
+    if hasattr(current_user, "interests") and hasattr(target_user, "interests"):
+        if current_user.interests and target_user.interests:
+            shared = set(current_user.interests) & set(target_user.interests)
+            mutuals.extend([f"Interest: {i}" for i in shared])
+
+    return mutuals
