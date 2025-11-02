@@ -11,9 +11,10 @@ from sqlalchemy import (
     TIMESTAMP,
     Table,
     UniqueConstraint,
+    select,
 )
 from sqlalchemy.sql import func, text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, column_property
 from sqlalchemy_searchable import TSVectorType
 from app.database import Base
 import enum
@@ -55,8 +56,21 @@ post_categories = Table(
 )
 
 
+# FOLLOWER MODEL
+class Follower(Base):
+    __tablename__ = "followers"
 
-# MODELS
+    id = Column(Integer, primary_key=True, index=True)
+    follower_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    followed_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("follower_id", "followed_id", name="unique_follow"),)
+
+    follower = relationship("User", foreign_keys=[follower_id], back_populates="following")
+    followed = relationship("User", foreign_keys=[followed_id], back_populates="followers")
+
+
+#USER MODEL
 class User(Base):
     __tablename__ = "users"
 
@@ -102,6 +116,36 @@ class User(Base):
     owned_groups = relationship("Group", back_populates="owner")
     mp = relationship("MP", back_populates="user", uselist=False)
     articles = relationship("Article", back_populates="author")
+
+    # 👥 Relationships with followers/following
+    followers = relationship(
+        "Follower",
+        foreign_keys=[Follower.followed_id],
+        back_populates="followed",
+        cascade="all, delete-orphan"
+    )
+
+    following = relationship(
+        "Follower",
+        foreign_keys=[Follower.follower_id],
+        back_populates="follower",
+        cascade="all, delete-orphan"
+    )
+
+    #  Derived counts (optional, but great for UI)
+    followers_count = column_property(
+        select(func.count(Follower.id))
+        .where(Follower.followed_id == id)
+        .correlate_except(Follower)
+        .scalar_subquery()
+    )
+
+    following_count = column_property(
+        select(func.count(Follower.id))
+        .where(Follower.follower_id == id)
+        .correlate_except(Follower)
+        .scalar_subquery()
+    )
 
 
 class Post(Base):
@@ -338,15 +382,3 @@ class Topic(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     search_vector = Column(TSVectorType("title", "summary", "content"))
 
-
-class Follower(Base):
-    __tablename__ = "followers"
-
-    id = Column(Integer, primary_key=True, index=True)
-    follower_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    followed_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-
-    __table_args__ = (UniqueConstraint("follower_id", "followed_id", name="unique_follow"),)
-
-    follower = relationship("User", foreign_keys=[follower_id], back_populates="following")
-    followed = relationship("User", foreign_keys=[followed_id], back_populates="followers")
