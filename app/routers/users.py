@@ -24,6 +24,7 @@ from app.schemas import UserOut
 from app.models import Post, Comment, Vote
 from sqlalchemy import delete
 from sqlalchemy.orm import relationship
+from app.models import Follower
 
 
 
@@ -275,3 +276,80 @@ async def get_my_following(
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+@router.get("/suggested", response_model=list[schemas.UserPublic])
+async def suggested_users(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Suggest users that the current user might want to follow:
+    - Prefer users from the same region.
+    - Exclude those the user already follows.
+    - Exclude self.
+    """
+
+
+    # Get IDs of users the current user already follows
+    following_stmt = select(Follower.followed_id).where(Follower.follower_id == current_user.id)
+    following_result = await db.execute(following_stmt)
+    following_ids = [row[0] for row in following_result.fetchall()]
+
+    # Main suggestion logic
+    stmt = (
+        select(models.User)
+        .where(models.User.id != current_user.id)
+        .where(~models.User.id.in_(following_ids))
+        .order_by(func.random())
+        .limit(10)
+    )
+
+    # Prioritize same region if possible
+    if current_user.region:
+        stmt = (
+            select(models.User)
+            .where(models.User.id != current_user.id)
+            .where(models.User.region == current_user.region)
+            .where(~models.User.id.in_(following_ids))
+            .order_by(func.random())
+            .limit(10)
+        )
+
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    return users
+
+# Get mutual followers between current user and another user
+@router.get("/{user_id}/mutual-followers", response_model=list[schemas.UserPublic])
+async def get_mutual_followers(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+     Get mutual followers between the current user and another user.
+    """
+    from app.models import Follower
+
+    if current_user.id == user_id:
+        return []  # No mutuals with self
+
+    # Followers of current user
+    current_followers_stmt = select(Follower.followed_id).where(Follower.follower_id == current_user.id)
+    current_following = [r[0] for r in (await db.execute(current_followers_stmt)).fetchall()]
+
+    # Followers of the target user
+    target_followers_stmt = select(Follower.followed_id).where(Follower.follower_id == user_id)
+    target_following = [r[0] for r in (await db.execute(target_followers_stmt)).fetchall()]
+
+    # Find intersection
+    mutual_ids = list(set(current_following) & set(target_following))
+
+    if not mutual_ids:
+        return []
+
+    result = await db.execute(select(models.User).where(models.User.id.in_(mutual_ids)))
+    mutual_users = result.scalars().all()
+
+    return mutual_users
+
