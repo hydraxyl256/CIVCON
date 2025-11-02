@@ -9,7 +9,7 @@ from .database import engine, get_db, Base
 from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws, articles, uploads, topics, follow 
+from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws, articles, uploads, topics, follow, events
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 from app.websockets import topics as topics_ws
@@ -72,6 +72,7 @@ app.include_router(uploads.router)
 app.include_router(topics.router)
 app.include_router(topics_ws.router)
 app.include_router(follow.router)
+app.include_router(events.router)
 
 
 # Database initialization

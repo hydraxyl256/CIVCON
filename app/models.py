@@ -12,6 +12,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     select,
+    Date,
 )
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship, column_property
@@ -69,6 +70,32 @@ class Follower(Base):
     follower = relationship("User", foreign_keys=[follower_id], back_populates="following")
     followed = relationship("User", foreign_keys=[followed_id], back_populates="followers")
 
+# EVENT MODELS
+class Event(Base):
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    date = Column(Date, nullable=False)
+    time = Column(String(20), nullable=True)
+    location = Column(String(255), nullable=False)
+    category = Column(String(100), nullable=True)
+    organizer_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+
+    organizer = relationship("User", back_populates="organized_events")
+    attendees = relationship("EventAttendee", back_populates="event", cascade="all, delete-orphan")
+
+# EVENT ATTENDEE MODEL
+class EventAttendee(Base):
+    __tablename__ = "event_attendees"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+
+    user = relationship("User", back_populates="attended_events")
+    event = relationship("Event", back_populates="attendees")
 
 #USER MODEL
 class User(Base):
@@ -132,7 +159,7 @@ class User(Base):
         cascade="all, delete-orphan"
     )
 
-    #  Derived counts (optional, but great for UI)
+    #  Derived counts 
     followers_count = column_property(
         select(func.count(Follower.id))
         .where(Follower.followed_id == id)
@@ -146,6 +173,9 @@ class User(Base):
         .correlate_except(Follower)
         .scalar_subquery()
     )
+    organized_events = relationship("Event", back_populates="organizer", cascade="all, delete-orphan")
+    attended_events = relationship("EventAttendee", back_populates="user", cascade="all, delete-orphan")
+
 
 
 class Post(Base):

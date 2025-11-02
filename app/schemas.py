@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator, computed_field
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 import enum
 
 
@@ -481,3 +481,34 @@ class MutualInterestsResponse(BaseModel):
     user_id: int
     username: str
     mutual_interests: List[str]
+
+
+class EventBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+    date: date
+    time: Optional[str] = None
+    location: str
+    category: Optional[str] = None
+
+
+class EventCreate(EventBase):
+    pass
+
+
+class OrganizerPublic(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    username: str
+    profile_image: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EventPublic(EventBase):
+    id: int
+    attendees: int = 0
+    organizer: Optional[OrganizerPublic]
+
+    model_config = {"from_attributes": True}
