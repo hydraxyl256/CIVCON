@@ -195,6 +195,7 @@ class Post(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     search_vector = Column(TSVectorType("title", "content"), nullable=True)
+    status = Column(String, default="Approved")
     media = relationship("PostMedia", back_populates="post", cascade="all, delete-orphan")
     share_count = Column(Integer, default=0)
 
