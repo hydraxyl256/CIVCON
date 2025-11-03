@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, String, cast
 from app.database import get_db
 from app.models import User, Message, District
 from datetime import datetime, timedelta
@@ -52,11 +52,11 @@ async def get_admin_analytics(db: AsyncSession = Depends(get_db)):
 
     #  Top districts by user count
     result = await db.execute(
-        select(District.name, func.count(User.id))
-        .join(User, User.district_id == District.id)
-        .group_by(District.name)
-        .limit(5)
-    )
+    select(District.name, func.count(User.id))
+    .join(User, cast(User.district_id, String) == cast(District.id, String))
+    .group_by(District.name)
+    .limit(5)
+)
     top_districts = [{"name": row[0], "users": row[1]} for row in result.all()]
 
     #  Post analytics (topic + role)
