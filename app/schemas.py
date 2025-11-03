@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator, computed_field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, date
 import enum
 
@@ -527,3 +527,44 @@ class UserTypeCreate(UserTypeBase):
 
 class UserTypeUpdate(UserTypeBase):
     pass
+
+
+class RolePermission(BaseModel):
+    post: bool
+    moderate: bool
+
+class NotificationSettings(BaseModel):
+    email: bool
+    sms: bool
+
+class AdminSettingBase(BaseModel):
+    siteName: str = Field(..., alias="site_name")
+    rolePermissions: Dict[Role, RolePermission]
+    notifications: NotificationSettings
+
+    class Config:
+        populate_by_name = True
+        use_enum_values = True
+        orm_mode = True
+
+
+class AdminSettingOut(AdminSettingBase):
+    id: int
+    updated_at: Optional[str]
+
+
+class AdminSettingUpdate(AdminSettingBase):
+    pass
+
+
+def default_admin_setting() -> AdminSettingOut:
+    return AdminSettingOut(
+        id=1,
+        siteName="Uganda Connects",
+        rolePermissions={
+            Role.ADMIN: {"post": True, "moderate": True},
+            Role.JOURNALIST: {"post": True, "moderate": True},
+            Role.CITIZEN: {"post": True, "moderate": False},
+            Role.MP: {"post": False, "moderate": True},
+        },
+        notifications={"email": True, "sms": False},)

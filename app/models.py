@@ -448,3 +448,35 @@ class Subscription(Base):
     payment_method = Column(String, nullable=True)
 
     user = relationship("User", back_populates="subscriptions")
+
+
+class AdminSetting(Base):
+    __tablename__ = "admin_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    site_name = Column(String, default="Uganda Connects")
+
+    # store role-based permissions using your Role enum keys
+    role_permissions = Column(
+        JSON,
+        nullable=False,
+        default=lambda: {
+            Role.ADMIN.value: {"post": True, "moderate": True},
+            Role.JOURNALIST.value: {"post": True, "moderate": True},
+            Role.CITIZEN.value: {"post": True, "moderate": False},
+            Role.MP.value: {"post": False, "moderate": True},
+        },
+    )
+
+    notifications = Column(
+        JSON,
+        nullable=False,
+        default=lambda: {"email": True, "sms": False},
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self):
+        return f"<AdminSetting(site_name={self.site_name})>"
