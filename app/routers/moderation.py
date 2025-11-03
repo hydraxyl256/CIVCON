@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from app.database import get_db
 from app.models import Post, User, Comment, Vote, Notification
 from app.routers.oauth2 import get_current_user
-from app.schemas import UserPublic
+from app.schemas import UserPublic, PostResponse
 from datetime import datetime
 
 router = APIRouter(prefix="/admin/moderation", tags=["Admin Moderation"])
@@ -166,3 +166,33 @@ async def get_trending_topics(
         }
 
     return list(topics.values())
+
+
+#  Suspend a post
+@router.post("/post/{post_id}/suspend", response_model=PostResponse)
+async def suspend_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Ensure admin only
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    if getattr(post, "status", None) == "Suspended":
+        raise HTTPException(status_code=400, detail="Post already suspended")
+
+    post.status = "Suspended"
+    post.updated_at = datetime.utcnow()
+
+    db.add(post)
+    await db.commit()
+    await db.refresh(post)
+
+    return post
