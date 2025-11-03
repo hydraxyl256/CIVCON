@@ -1,6 +1,7 @@
 from sqlalchemy import (
     Column,
     Integer,
+    Float,
     String,
     Boolean,
     DateTime,
@@ -275,6 +276,7 @@ class Message(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     response = Column(String, nullable=True)  # MP reply
     responded_at = Column(DateTime, nullable=True)
+    language = Column(String, nullable=True)
     mp_id = Column(Integer, ForeignKey("mps.id"), nullable=False)
     mp = relationship("MP", back_populates="messages")
 
@@ -282,6 +284,11 @@ class Message(Base):
     sender = relationship("User", foreign_keys=[sender_id], back_populates="messages_sent")
     recipient = relationship("User", foreign_keys=[recipient_id], back_populates="messages_received")
 
+
+class District(Base):
+    __tablename__ = "districts"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True)
 
 class LiveFeed(Base):
     __tablename__ = "live_feeds"
@@ -412,3 +419,11 @@ class Topic(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     search_vector = Column(TSVectorType("title", "summary", "content"))
 
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    plan_name = Column(String, nullable=False)
+    amount = Column(Float, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
