@@ -146,7 +146,7 @@ class User(Base):
     mp = relationship("MP", back_populates="user", uselist=False)
     articles = relationship("Article", back_populates="author")
 
-    # 👥 Relationships with followers/following
+    #  Relationships with followers/following
     followers = relationship(
         "Follower",
         foreign_keys=[Follower.followed_id],
@@ -177,6 +177,9 @@ class User(Base):
     )
     organized_events = relationship("Event", back_populates="organizer", cascade="all, delete-orphan")
     attended_events = relationship("EventAttendee", back_populates="user", cascade="all, delete-orphan")
+    subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
+    user_type_id = Column(Integer, ForeignKey("user_types.id"), nullable=True)
+    user_type = relationship("UserType", back_populates="users")
 
 
 
