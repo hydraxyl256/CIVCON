@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     select,
     Date,
+    Numeric,
 )
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship, column_property
@@ -419,11 +420,27 @@ class Topic(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     search_vector = Column(TSVectorType("title", "summary", "content"))
 
+
+class UserType(Base):
+    __tablename__ = "user_types"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True)
+    monthly_charge = Column(Numeric, default=0)
+    is_free = Column(Boolean, default=False)
+    description = Column(String, nullable=True)
+
+    users = relationship("User", back_populates="user_type")
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    plan_name = Column(String, nullable=False)
-    amount = Column(Float, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    plan = Column(String)
+    status = Column(String, default="pending")
+    start_date = Column(DateTime, default=datetime.utcnow)
+    end_date = Column(DateTime)
+    amount = Column(Numeric, default=0)
+    payment_method = Column(String, nullable=True)
+
+    user = relationship("User", back_populates="subscriptions")

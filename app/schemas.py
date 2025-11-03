@@ -514,3 +514,16 @@ class EventPublic(EventBase):
     organizer: Optional[OrganizerPublic]
 
     model_config = {"from_attributes": True}
+
+
+class UserTypeBase(BaseModel):
+    name: str
+    monthlyCharge: float
+    isFree: bool
+    description: str | None = None
+
+class UserTypeCreate(UserTypeBase):
+    pass
+
+class UserTypeUpdate(UserTypeBase):
+    pass
