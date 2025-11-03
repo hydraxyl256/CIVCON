@@ -9,11 +9,14 @@ from .database import engine, get_db, Base
 from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws, articles, uploads, topics, follow, events
+from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws, articles, uploads, topics, follow, events, chat
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 from app.websockets import topics as topics_ws
 from .config import settings
+from app.core.manager import manager
+from app.core.manager_redis import get_manager
+
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -28,6 +31,11 @@ app = FastAPI(
 
 
 )
+
+
+REDIS_URL = settings.redis_url
+manager = get_manager(redis_url=settings.redis_url)
+
 
 origins = [
     "https://civ-con-sh2j.vercel.app", 
@@ -73,6 +81,7 @@ app.include_router(topics.router)
 app.include_router(topics_ws.router)
 app.include_router(follow.router)
 app.include_router(events.router)
+app.include_router(chat.router)
 
 
 # Database initialization
@@ -86,30 +95,9 @@ async def create_tables():
 def root():
     return {"message": "Hello, Welcome to CIVCON API!"}
 
-
-# WebSocket connection manager
-class ConnectionManager:
-    """Handles real-time WebSocket connections."""
-    def __init__(self):
-        self.active_connections: Dict[int, WebSocket] = {}
-
-    async def connect(self, websocket: WebSocket, user_id: int):
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        logger.info(f"WebSocket connected for user_id: {user_id}")
-
-    def disconnect(self, user_id: int):
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-            logger.info(f"WebSocket disconnected for user_id: {user_id}")
-
-    async def send_message(self, user_id: int, message: dict):
-        if user_id in self.active_connections:
-            await self.active_connections[user_id].send_json(message)
-            logger.info(f"Sent WebSocket message to user_id={user_id}: {message}")
-
-# Global connection manager
-manager = ConnectionManager()
+@app.on_event("shutdown")
+async def shutdown_event():
+    await manager.stop()
 
 
 # WebSocket for notifications

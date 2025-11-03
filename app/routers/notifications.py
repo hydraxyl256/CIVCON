@@ -4,11 +4,11 @@ from sqlalchemy.future import select
 from typing import List
 from datetime import datetime
 
-from ..database import get_db
-from ..models import Notification, User, Role
-from ..schemas import NotificationResponse, NotificationBase
+from app.database import get_db
+from app.models import Notification, User, Role
+from app.schemas import NotificationResponse, NotificationBase
 from .permissions import require_role
-from ..core.manager import manager
+from app.core.manager import manager
 
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])

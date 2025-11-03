@@ -505,6 +505,8 @@ class OrganizerPublic(BaseModel):
 
     model_config = {"from_attributes": True}
 
+class AttendeePublic(OrganizerPublic):
+    pass
 
 class EventPublic(EventBase):
     id: int
