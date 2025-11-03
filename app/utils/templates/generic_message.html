@@ -1,0 +1,14 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>Dear {{ name or "Citizen" }},</p>
+
+<p>{{ body | safe }}</p>
+
+{% if cta_url %}
+  <p style="text-align:center;">
+    <a href="{{ cta_url }}" class="btn">{{ cta_text or "Open" }}</a>
+  </p>
+{% endif %}
+
+<p>Kind regards,<br><strong>The CIV-CON Team</strong></p>
+{% endblock %}

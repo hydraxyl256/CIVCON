@@ -9,7 +9,7 @@ from .database import engine, get_db, Base
 from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, admin, mp, live_feeds, live_ws, articles, uploads, topics, follow, events, chat, admin_analytics, admin_dashboard, admin_subscriptions, moderation
+from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, mp, live_feeds, live_ws, articles, uploads, topics, follow, events, chat, admin_analytics, admin_dashboard, admin_subscriptions, moderation, admin_communication
 from .routers.oauth2 import get_current_user
 from .routers.ussd import router as ussd_router
 from app.websockets import topics as topics_ws
@@ -70,7 +70,6 @@ app.include_router(categories.router)
 app.include_router(groups.router)
 app.include_router(notifications.router)
 app.include_router(messages.router)
-app.include_router(admin.router)
 app.include_router(ussd_router)
 app.include_router(mp.router)
 app.include_router(live_feeds.router)   
@@ -86,6 +85,7 @@ app.include_router(admin_analytics.router)
 app.include_router(admin_dashboard.router)
 app.include_router(admin_subscriptions.router)
 app.include_router(moderation.router)
+app.include_router(admin_communication.router)  
 
 
 

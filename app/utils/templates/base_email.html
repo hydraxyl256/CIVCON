@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <title>{{ subject or "CIV-CON Message" }}</title>
+  <style>
+    body {
+      background: #f6f9fc;
+      font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+      color: #333;
+      margin: 0;
+      padding: 0;
+    }
+    .email-wrapper {
+      max-width: 640px;
+      margin: 40px auto;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    .email-header {
+      background: #15803d; /* green tone */
+      color: #fff;
+      text-align: center;
+      padding: 24px;
+    }
+    .email-header h1 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0.5px;
+    }
+    .email-content {
+      padding: 32px;
+      line-height: 1.6;
+    }
+    .email-footer {
+      font-size: 12px;
+      text-align: center;
+      color: #999;
+      padding: 16px;
+    }
+    a {
+      color: #15803d;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      margin: 16px 0;
+      border-radius: 6px;
+      background: #15803d;
+      color: white;
+      text-decoration: none;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrapper">
+    <div class="email-header">
+      <h1>CIV-CON</h1>
+    </div>
+    <div class="email-content">
+      {% block content %}{% endblock %}
+    </div>
+    <div class="email-footer">
+      <p>© {{ year }} CIV-CON. All rights reserved.</p>
+      <p>Empowering civic engagement in Uganda.</p>
+    </div>
+  </div>
+</body>
+</html>
