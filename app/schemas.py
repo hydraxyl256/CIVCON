@@ -545,7 +545,7 @@ class AdminSettingBase(BaseModel):
     class Config:
         populate_by_name = True
         use_enum_values = True
-        orm_mode = True
+        model_config = {"from_attributes": True}
 
 
 class AdminSettingOut(AdminSettingBase):

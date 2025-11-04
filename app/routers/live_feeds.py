@@ -151,7 +151,7 @@ async def get_live_feed_messages(
     res = await db.execute(q)
     messages = res.scalars().unique().all()
 
-    # Build response objects (pydantic orm_mode will handle objects, but make consistent dicts)
+    # Build response objects manually to include user info
     data = []
     for m in messages:
         user = None
