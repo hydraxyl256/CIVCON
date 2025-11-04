@@ -362,12 +362,12 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                     is_spam, spam_prob = spam_detector.predict_spam(question, language.lower())
                     is_offensive = spam_detector.check_offensive(question, language.lower())
                 except Exception as e:
-                    logger.error(f"Spam detection failed: {e}")
-                    is_spam, is_offensive = False, False  # Fallback to allow message
+                    logger.warning(f"Spam detection failed safely: {e}")
+                    is_spam, is_offensive = False, False  # Always allow messages if filter fails
 
-                if is_spam or is_offensive:
-                    message_flagged.inc()
-                    logger.warning(f"Flagged message from {phone_number}: spam={is_spam}, offensive={is_offensive}, text={question}")
+                if is_spam and spam_prob < 0.8:
+                    logger.info(f"Low-confidence spam (prob={spam_prob:.2f}) — allowing message.")
+                    is_spam = False
                     # Save flagged message
                     try:
                         msg = Message(
