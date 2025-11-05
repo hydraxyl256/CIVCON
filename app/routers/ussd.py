@@ -103,9 +103,15 @@ def validate_name(name: str) -> bool:
     return bool(name.strip() and re.match(r'^[A-Za-z\s]+$', name.strip()))
 
 async def validate_district(db: AsyncSession, district: str) -> bool:
-    result = await db.execute(select(MP.district_id).distinct())
-    valid_districts = {d.lower().replace("district", "").strip() for d in result.scalars().all()}
-    return district.lower().replace("district", "").strip() in valid_districts
+    try:
+        result = await db.execute(select(MP.district_id).distinct())
+        districts = [str(d).lower().replace("district", "").strip() for d in result.scalars().all() if d]
+        user_input = district.lower().replace("district", "").strip()
+        return user_input in districts
+    except Exception as e:
+        logger.error(f"District validation error: {e}")
+        return False
+
 
 def sanitize_input(text: str) -> str:
     return re.sub(r'[<>]', '', text.strip())[:160]

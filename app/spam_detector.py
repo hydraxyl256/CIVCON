@@ -12,7 +12,7 @@ import logging
 from prometheus_client import Counter
 
 
-#  Logging Setup
+# Logging Setup
 logger = logging.getLogger("app.spam_detector")
 
 # Metrics
@@ -69,7 +69,7 @@ class SpamDetector:
 
         self._load_or_train_models()
 
-  
+
     #  Helper Methods
     def _load_stopwords(self, lang: str):
         try:
@@ -95,7 +95,7 @@ class SpamDetector:
                 self._train_model(lang)
         self.is_loaded = bool(self.pipelines)
 
-
+    
     #  Model Training
     def _train_model(self, lang: str):
         """Train spam model for a given language."""
@@ -157,7 +157,7 @@ class SpamDetector:
             logger.error(f"⚠️ Model training failed for {lang}: {e}")
             self.pipelines[lang] = None
 
-    
+ 
     #  Preprocessing
     def preprocess_text(self, text: str, lang: str) -> str:
         try:
@@ -172,7 +172,7 @@ class SpamDetector:
             logger.warning(f"Preprocess failed: {e}")
             return text.lower()
 
-    
+
     #  Prediction
     def predict_spam(self, text: str, lang: str = "en") -> Tuple[bool, float]:
         if not self.is_loaded or not self.pipelines.get(lang):
@@ -191,7 +191,7 @@ class SpamDetector:
             logger.error(f"Spam prediction failed for {lang}: {e}")
             return False, 0.0
 
-   
+ 
     #  Offensive Content Detection
     def check_offensive(self, text: str, lang: str = "en") -> bool:
         text_lower = text.lower()
