@@ -5,51 +5,55 @@ from typing import Dict
 import json
 import logging
 from datetime import datetime
-from .database import engine, get_db, Base
-from . import models
 from starlette.middleware.sessions import SessionMiddleware
 import os
-from app.routers import users, posts, auth, vote, search, comments, groups, categories, notifications, messages, mp, live_feeds, live_ws, articles, uploads, topics, follow, events, chat, admin_analytics, admin_dashboard, admin_subscriptions, moderation, admin_communication
-from .routers.oauth2 import get_current_user
-from .routers.ussd import router as ussd_router
+
+# Internal imports
+from app.database import engine, get_db, Base
+from app import models
+from app.config import settings
+from app.routers import (
+    users, posts, auth, vote, search, comments, groups, categories,
+    notifications, messages, mp, live_feeds, live_ws, articles,
+    uploads, topics, follow, events, chat, admin_analytics,
+    admin_dashboard, admin_subscriptions, moderation,
+    admin_communication
+)
+from app.routers.ussd import router as ussd_router
 from app.websockets import topics as topics_ws
-from .config import settings
 from app.core.manager import manager
+from app.routers.oauth2 import get_current_user
 from app.core.manager_redis import get_manager
+from app.spam_detector import download_nltk_resources
 
 
-# Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+#  Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger("CIVCON")
 
 
-# App and CORS
+#  FastAPI Application
+
 app = FastAPI(
     title="CIVCON API",
-    description="CIVCON is a community-driven forum platform that enables Ugandan citizens to directly engage with their MPs on local issues, fostering transparency, accountability, and collaborative problem-solving. The platform allows citizens to raise concerns, form communities, and receive responses from representatives, while MPs can view constituency-specific complaints and take action. Journalists can contribute by going live to highlight community events.",
+    description=(
+        "CIVCON enables Ugandan citizens to directly engage with their MPs "
+        "on local issues, fostering transparency, accountability, and civic participation."
+    ),
     version="1.0.0"
-
-
 )
 
-
-REDIS_URL = settings.redis_url
-manager = get_manager(redis_url=settings.redis_url)
-
-
+#  CORS Settings
 origins = [
-    "https://civ-con-sh2j.vercel.app", 
-    "https://civ-con-front.vercel.app/",
+    "https://civ-con-sh2j.vercel.app",
+    "https://civ-con-front.vercel.app",
     "http://localhost:5173",
-    "https://civ-con.org",       
-    "https://app.civ-con.org", 
+    "https://civ-con.org",
+    "https://app.civ-con.org"
 ]
-
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=(settings.session_secret_key, "supersecret_session_key"),  
-)
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,7 +63,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
+
+#  Session Middleware (Fix: Correct secret_key format)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret_key or "supersecret_session_key"
+)
+
+
+#  Redis Manager
+REDIS_URL = settings.redis_url
+manager = get_manager(redis_url=REDIS_URL)
+
+
+#  Include Routers (API Modules)
+
 app.include_router(users.router)
 app.include_router(posts.router)
 app.include_router(auth.router)
@@ -70,9 +88,8 @@ app.include_router(categories.router)
 app.include_router(groups.router)
 app.include_router(notifications.router)
 app.include_router(messages.router)
-app.include_router(ussd_router)
 app.include_router(mp.router)
-app.include_router(live_feeds.router)   
+app.include_router(live_feeds.router)
 app.include_router(live_ws.router)
 app.include_router(articles.router)
 app.include_router(uploads.router)
@@ -85,24 +102,53 @@ app.include_router(admin_analytics.router)
 app.include_router(admin_dashboard.router)
 app.include_router(admin_subscriptions.router)
 app.include_router(moderation.router)
-app.include_router(admin_communication.router)  
+app.include_router(admin_communication.router)
+app.include_router(ussd_router)  
 
 
-
-# Database initialization
+#  Application Startup Events
 @app.on_event("startup")
-async def create_tables():
+async def on_startup():
+    """Initialize database, Redis, and NLTK resources."""
+    # Create DB tables if not exist
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created")
+    logger.info("✅ Database tables initialized")
 
+    # Initialize Redis Manager
+    global manager
+    manager = get_manager(redis_url=settings.redis_url)
+    logger.info("✅ Redis manager initialized")
+
+    # Download NLTK resources for spam detection
+    try:
+        download_nltk_resources()
+        logger.info("✅ NLTK resources ready")
+    except Exception as e:
+        logger.warning(f"⚠️ NLTK resource setup failed: {e}")
+
+
+#  Shutdown Event
+@app.on_event("shutdown")
+async def on_shutdown():
+    """Clean shutdown for Redis and background workers."""
+    try:
+        await manager.stop()
+        logger.info("🛑 Redis manager stopped cleanly")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis manager shutdown error: {e}")
+
+
+#  Root Endpoint
 @app.get("/")
 def root():
-    return {"message": "Hello, Welcome to CIVCON API!"}
+    return {
+        "message": "Welcome to CIVCON API 🚀",
+        "status": "running",
+        "version": "1.0.0",
+        "environment": os.getenv("ENVIRONMENT", "development")
+    }
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await manager.stop()
 
 
 # WebSocket for notifications
