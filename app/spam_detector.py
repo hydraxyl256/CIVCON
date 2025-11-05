@@ -11,64 +11,53 @@ from nltk.tokenize import word_tokenize
 import logging
 from prometheus_client import Counter
 
-# -------------------------------------------------------------------
-# 🧱 Logging & Metrics
-# -------------------------------------------------------------------
+
+#  Logging Setup
 logger = logging.getLogger("app.spam_detector")
 
+# Metrics
 spam_detections = Counter('spam_detections_total', 'Total spam detections')
-offensive_detections = Counter('offensive_detections_total', 'Total offensive content detections')
-spam_detector_failures = Counter('spam_detector_failures_total', 'Total spam detector failures')
+offensive_detections = Counter('offensive_detections_total', 'Total offensive detections')
 
-# -------------------------------------------------------------------
-# 🧰 Paths and Directories
-# -------------------------------------------------------------------
+
+#  Paths
 NLTK_DATA_PATH = os.environ.get('NLTK_DATA_PATH', '/opt/render/nltk_data')
-MODEL_DIR = os.environ.get('MODEL_DIR', '/opt/render/project/src/models')
-
+nltk.data.path.append(NLTK_DATA_PATH)
 os.makedirs(NLTK_DATA_PATH, exist_ok=True)
+
+MODEL_DIR = os.environ.get('MODEL_DIR', '/opt/render/project/src/models')
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-nltk.data.path.append(NLTK_DATA_PATH)
 
-# -------------------------------------------------------------------
-# 📦 NLTK Resource Setup
-# -------------------------------------------------------------------
+#  NLTK Resource Downloader
 def download_nltk_resources():
-    """Download NLTK resources safely (only once at build/start)."""
+    """Safely download NLTK resources."""
     try:
         nltk.download('punkt', download_dir=NLTK_DATA_PATH, quiet=True)
         nltk.download('stopwords', download_dir=NLTK_DATA_PATH, quiet=True)
-        logger.info("✅ NLTK resources ready at %s", NLTK_DATA_PATH)
+        logger.info("✅ NLTK resources ready.")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to download NLTK resources: {e}")
+        logger.warning(f"⚠️ NLTK resources could not be downloaded: {e}")
 
-# -------------------------------------------------------------------
-# 🚫 Offensive Words
-# -------------------------------------------------------------------
+
+#  Offensive Words (per language)
 OFFENSIVE_WORDS = {
-    "en": ["damn", "shit", "fuck", "bitch", "idiot", "stupid", "nonsense"],
-    "lg": ["mufu", "buwereza", "silu"],
-    "rn": ["murima", "bubi", "okubina"],
-    "lu": ["rac", "manya", "lonyo"],
-    "sw": ["mjinga", "vitu vibaya", "taka"],
-    "rt": ["bubi", "buru", "mufu"]
+    "en": ["damn", "shit", "fuck", "bitch", "idiot", "stupid"],
+    "lg": ["mufu", "bubi", "bwongo"],
+    "rn": ["murima", "bubi"],
+    "lu": ["rac", "lonyo"],
+    "sw": ["mjinga", "mavi", "pumbavu"],
+    "rt": ["buru", "mufu"]
 }
 
-# -------------------------------------------------------------------
-# 🧠 SpamDetector Class
-# -------------------------------------------------------------------
-class SpamDetector:
-    """
-    Robust spam and offensive content detector with built-in fault tolerance.
-    Never blocks app flow — fails gracefully.
-    """
 
+#  Spam Detector Class
+class SpamDetector:
     def __init__(self, model_path=os.path.join(MODEL_DIR, "spam_model")):
         self.model_path = model_path
         self.pipelines = {}
         self.is_loaded = False
-        self.safe_mode = False  # Auto enabled if model or nltk fails
+
         self.stop_words = {
             "en": self._load_stopwords('english'),
             "lg": set(),
@@ -78,150 +67,137 @@ class SpamDetector:
             "rt": set()
         }
 
-        try:
-            self._load_or_train_model()
-        except Exception as e:
-            self.safe_mode = True
-            spam_detector_failures.inc()
-            logger.error(f"🚨 SpamDetector initialization failed — fallback to safe mode: {e}")
+        self._load_or_train_models()
 
-    # -------------------------------------------------------------------
-    # Stopword Loader
-    # -------------------------------------------------------------------
-    def _load_stopwords(self, language: str) -> set:
+  
+    #  Helper Methods
+    def _load_stopwords(self, lang: str):
         try:
-            return set(stopwords.words(language))
-        except Exception:
-            logger.warning(f"Stopwords unavailable for {language}, using empty set.")
+            return set(stopwords.words(lang)) if lang in stopwords.fileids() else set()
+        except LookupError:
+            logger.warning(f"No stopwords found for {lang}.")
             return set()
 
-    # -------------------------------------------------------------------
-    # Model Loader / Trainer
-    # -------------------------------------------------------------------
-    def _load_or_train_model(self):
+    def _load_or_train_models(self):
+        """Load or train spam models for all languages."""
         for lang in OFFENSIVE_WORDS.keys():
             model_file = f"{self.model_path}_{lang}.pkl"
             try:
                 if os.path.exists(model_file):
-                    with open(model_file, 'rb') as f:
+                    with open(model_file, "rb") as f:
                         self.pipelines[lang] = pickle.load(f)
                     logger.info(f"✅ Loaded spam model for {lang}")
                 else:
                     logger.info(f"⚙️ Training new spam model for {lang}")
                     self._train_model(lang)
             except Exception as e:
-                spam_detector_failures.inc()
-                logger.warning(f"Model load error for {lang}: {e}, retraining...")
+                logger.error(f"⚠️ Model loading failed for {lang}: {e}")
                 self._train_model(lang)
         self.is_loaded = bool(self.pipelines)
 
-    # -------------------------------------------------------------------
-    # Simple In-Memory Training (Fallback)
-    # -------------------------------------------------------------------
+
+    #  Model Training
     def _train_model(self, lang: str):
-        data_samples = {
+        """Train spam model for a given language."""
+        sms_data = {
             "en": [
                 ("Free entry to win a prize!", "spam"),
-                ("URGENT! Claim your reward now", "spam"),
-                ("You are a stupid MP!", "spam"),
                 ("Hello, how are you?", "ham"),
-                ("Please fix the road in Kampala", "ham"),
-                ("We need water supply in my district", "ham")
+                ("You are a stupid MP!", "spam"),
+                ("We need better roads in Kampala", "ham"),
+                ("URGENT! Claim your reward!", "spam"),
+                ("Please fix the water issue", "ham"),
             ],
             "lg": [
+                ("Wandika obuzibu bwo!", "ham"),
                 ("Mufu! Okuva ewa MP!", "spam"),
-                ("Wandika obuzibu bwo!", "ham")
+                ("Amazzi ga wano gali mabi", "ham")
             ],
             "rn": [
+                ("Okwanjwa ku buzibu!", "ham"),
                 ("Murima! MP wange!", "spam"),
                 ("Amaizi g'okuzibu", "ham")
             ],
             "lu": [
+                ("Wek ayie gi MP!", "ham"),
                 ("Rac! MP mamegi!", "spam"),
                 ("Pi peke i gang", "ham")
             ],
             "sw": [
+                ("Toa hoja zako!", "ham"),
                 ("Mjinga! Mbunge wako!", "spam"),
                 ("Maji hayatoshi hapa", "ham")
             ],
             "rt": [
+                ("Andika ebizibu byo!", "ham"),
                 ("Buru! MP wange!", "spam"),
                 ("Amaizi g'okuzibu", "ham")
             ]
         }
 
-        X, y = zip(*[(msg, 1 if label == "spam" else 0) for msg, label in data_samples.get(lang, data_samples["en"])])
+        data = sms_data.get(lang, sms_data["en"])
+        X = [msg for msg, _ in data]
+        y = [1 if label == "spam" else 0 for _, label in data]
+
         try:
+            stop_words = "english" if lang == "en" else None
             pipeline = Pipeline([
-                ('tfidf', TfidfVectorizer(max_features=1000, stop_words=self.stop_words.get(lang, set()))),
-                ('clf', LogisticRegression(max_iter=300))
+                ('tfidf', TfidfVectorizer(max_features=1000, stop_words=stop_words)),
+                ('clf', LogisticRegression())
             ])
             pipeline.fit(X, y)
 
             model_file = f"{self.model_path}_{lang}.pkl"
-            with open(model_file, 'wb') as f:
+            with open(model_file, "wb") as f:
                 pickle.dump(pipeline, f)
 
             self.pipelines[lang] = pipeline
-            logger.info(f"💾 Trained and saved model for {lang} at {model_file}")
+            logger.info(f"✅ Trained and saved spam model for {lang}")
         except Exception as e:
-            spam_detector_failures.inc()
             logger.error(f"⚠️ Model training failed for {lang}: {e}")
             self.pipelines[lang] = None
 
-    # -------------------------------------------------------------------
-    # Text Preprocessing
-    # -------------------------------------------------------------------
+    
+    #  Preprocessing
     def preprocess_text(self, text: str, lang: str) -> str:
         try:
-            text = re.sub(r"http\S+|www\S+", "", text)
-            text = re.sub(r"[^\w\s]", "", text)
+            text = re.sub(r'http\S+|www\S+|https\S+', '', text)
+            text = re.sub(r'\s+', ' ', text)
+            text = re.sub(r'[^\w\s]', '', text)
             tokens = word_tokenize(text.lower())
             stop_words = self.stop_words.get(lang, set())
-            tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
-            return " ".join(tokens)
+            tokens = [t for t in tokens if t not in stop_words and len(t) > 2]
+            return ' '.join(tokens)
         except Exception as e:
-            logger.warning(f"Preprocessing fallback for {lang}: {e}")
-            return " ".join([t for t in text.lower().split() if len(t) > 2])
+            logger.warning(f"Preprocess failed: {e}")
+            return text.lower()
 
-    # -------------------------------------------------------------------
-    # Spam Prediction
-    # -------------------------------------------------------------------
+    
+    #  Prediction
     def predict_spam(self, text: str, lang: str = "en") -> Tuple[bool, float]:
-        """Predict if text is spam — never raises exceptions."""
-        if self.safe_mode or not self.is_loaded:
+        if not self.is_loaded or not self.pipelines.get(lang):
+            logger.warning(f"No model for {lang}. Defaulting to not spam.")
             return False, 0.0
 
-        pipeline = self.pipelines.get(lang)
-        if not pipeline:
-            return False, 0.0
-
+        processed_text = self.preprocess_text(text, lang)
         try:
-            processed = self.preprocess_text(text, lang)
-            prediction = pipeline.predict([processed])[0]
-            prob = float(pipeline.predict_proba([processed])[0][1])
+            pipeline = self.pipelines[lang]
+            prediction = pipeline.predict([processed_text])[0]
+            probability = pipeline.predict_proba([processed_text])[0][1]
             if prediction == 1:
                 spam_detections.inc()
-            # Avoid blocking low-confidence predictions
-            return (prob >= 0.8), prob
+            return prediction == 1, float(probability)
         except Exception as e:
-            spam_detector_failures.inc()
-            logger.error(f"Spam prediction failed ({lang}): {e}")
+            logger.error(f"Spam prediction failed for {lang}: {e}")
             return False, 0.0
 
-    # -------------------------------------------------------------------
-    # Offensive Language Check
-    # -------------------------------------------------------------------
+   
+    #  Offensive Content Detection
     def check_offensive(self, text: str, lang: str = "en") -> bool:
-        try:
-            text_lower = text.lower()
-            words = OFFENSIVE_WORDS.get(lang.lower(), OFFENSIVE_WORDS["en"])
-            pattern = r'\b(?:' + '|'.join(map(re.escape, words)) + r')\b'
-            if re.search(pattern, text_lower):
-                offensive_detections.inc()
-                logger.warning(f"🚫 Offensive content detected [{lang}]: {text}")
-                return True
-        except Exception as e:
-            spam_detector_failures.inc()
-            logger.error(f"Offensive check failed: {e}")
-        return False
+        text_lower = text.lower()
+        offensive_words = OFFENSIVE_WORDS.get(lang, OFFENSIVE_WORDS["en"])
+        is_offensive = any(w in text_lower for w in offensive_words)
+        if is_offensive:
+            offensive_detections.inc()
+            logger.warning(f"⚠️ Offensive content detected: {text}")
+        return is_offensive
