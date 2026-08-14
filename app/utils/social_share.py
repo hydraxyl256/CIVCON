@@ -1,5 +1,5 @@
-import httpx
 from app.models import Post, User
+
 
 async def share_to_social_media(platform: str, post: Post, user: User):
     """Stub for integrating with Facebook, X (Twitter), etc."""

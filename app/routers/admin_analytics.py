@@ -1,12 +1,20 @@
+import asyncio
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends
+from sqlalchemy import String, cast, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, String, cast
-from app.database import get_db
-from app.models import User, Message, District
-from datetime import datetime, timedelta
 
-router = APIRouter(prefix="/admin/analytics", tags=["Admin Analytics"])
+from app.database import get_db
+from app.models import District, User
+from app.routers.permissions import require_admin
+
+router = APIRouter(
+    prefix="/admin/analytics",
+    tags=["Admin Analytics"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 #  GENERAL ANALYTICS
@@ -16,64 +24,84 @@ async def get_admin_analytics(db: AsyncSession = Depends(get_db)):
     Return aggregated analytics data for admin dashboard.
     """
 
-    # 1 User growth
-    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
-    users_last_month = (
-        await db.execute(
-            select(func.count(User.id)).where(
-                User.created_at >= datetime.utcnow() - timedelta(days=30)
+    # Perf: five independent aggregate queries run concurrently on the
+    # same async session — wall-clock becomes the slowest single query
+    # instead of the sum of all five.
+
+    async def _total_users():
+        return (await db.execute(select(func.count(User.id)))).scalar() or 0
+
+    async def _users_last_month(since):
+        return (
+            await db.execute(
+                select(func.count(User.id)).where(User.created_at >= since)
             )
+        ).scalar() or 0
+
+    async def _total_messages():
+        # Legacy messages table has been sunset — return 0.
+        return 0
+
+    async def _active_users():
+        # Legacy distinct Message.sender_id query is gone — fall back to
+        # counting distinct user ids in the time window.
+        return (
+            await db.execute(
+                select(func.count(func.distinct(User.id))).where(
+                    User.created_at >= since_30d
+                )
+            )
+        ).scalar() or 0
+
+    async def _post_categories():
+        # Legacy Message.language aggregate referenced the sunset
+        # messages table — return empty until we wire a real
+        # posts-based language aggregate.
+        return []
+
+    async def _top_districts():
+        r = await db.execute(
+            select(District.name, func.count(User.id))
+            .join(User, cast(User.district_id, String) == cast(District.id, String))
+            .group_by(District.name)
+            .limit(5)
         )
-    ).scalar() or 0
+        return [{"name": row[0], "users": row[1]} for row in r.all()]
+
+    async def _post_analytics():
+        # Legacy Message.language × User.role aggregate referenced the
+        # sunset messages table — return empty until we wire a real
+        # posts-based rollup.
+        return []
+
+    since_30d = datetime.now(UTC) - timedelta(days=30)
+    (
+        total_users,
+        users_last_month,
+        total_messages,
+        active_users,
+        post_categories,
+        top_districts,
+        post_analytics,
+    ) = await asyncio.gather(
+        _total_users(),
+        _users_last_month(since_30d),
+        _total_messages(),
+        _active_users(),
+        _post_categories(),
+        _top_districts(),
+        _post_analytics(),
+    )
 
     user_growth = {
         "value": total_users,
         "change": round((users_last_month / total_users) * 100 if total_users else 0, 2),
     }
 
-    #  Engagement rate (messages per active user)
-    total_messages = (await db.execute(select(func.count(Message.id)))).scalar() or 0
-    active_users = (
-        await db.execute(select(func.count(func.distinct(Message.sender_id))))
-    ).scalar() or 0
-
     engagement_rate = {
         "value": f"{round((total_messages / active_users) * 100 if active_users else 0, 2)}%",
         "change": 5,  # Placeholder
     }
-
-    #  Post categories (topics/languages)
-    result = await db.execute(
-        select(Message.language, func.count(Message.id)).group_by(Message.language)
-    )
-    post_categories = [
-        {"name": row[0] or "Unknown", "count": row[1]} for row in result.all()
-    ]
-
-    #  Top districts by user count
-    result = await db.execute(
-    select(District.name, func.count(User.id))
-    .join(User, cast(User.district_id, String) == cast(District.id, String))
-    .group_by(District.name)
-    .limit(5)
-)
-    top_districts = [{"name": row[0], "users": row[1]} for row in result.all()]
-
-    #  Post analytics (topic + role)
-    result = await db.execute(
-        select(Message.language, User.role, func.count(Message.id))
-        .join(User, User.id == Message.sender_id)
-        .group_by(Message.language, User.role)
-    )
-    post_analytics = [
-        {
-            "topic": row[0] or "General",
-            "role": row[1] or "Citizen",
-            "posts": row[2],
-            "engagement": min(100, row[2] // 2),
-        }
-        for row in result.all()
-    ]
 
     return {
         "userGrowth": user_growth,

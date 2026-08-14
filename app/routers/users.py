@@ -1,32 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+import logging
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from pydantic import BaseModel, EmailStr
-from app.database import get_db
-from app.models import User, MP, Role
-from app.crud import get_user_by_email
-from app.config import settings
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-import os
-import uuid
-import logging
-from datetime import datetime
-import json
 from sqlalchemy.orm import selectinload
-from app.routers.oauth2 import get_current_user
-from app.routers.auth import upload_to_cloudinary
-from app.schemas import  UserResponse, UserUpdate
-import cloudinary.uploader
-from app import models, schemas
-from sqlalchemy import func
-from app.schemas import UserOut, MutualInterestsResponse
-from app.models import Post, Comment, Vote
-from sqlalchemy import delete
-from sqlalchemy.orm import relationship
-from app.models import Follower
-from typing import List
 
+from app import models, schemas
+from app.config import settings
+from app.database import get_db
+from app.db_helpers import batched_counts
+from app.dependencies.auth import get_current_user
+from app.models import Comment, Follower, Post, User, Vote
+from app.routers.auth import upload_to_cloudinary
+from app.schemas import MutualInterestsResponse, UserOut, UserResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,7 +23,6 @@ SECRET_KEY = settings.secret_key
 ALGORITHM = settings.algorithm
 
 router = APIRouter(prefix="/users", tags=["users"])
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 # Get logged-in user's profile
@@ -143,9 +130,9 @@ async def update_user_profile(
             try:
                 upload_result = await upload_to_cloudinary(profile_image, folder="civcon/profiles")
                 user.profile_image = upload_result
-            except Exception as e:
+            except Exception as exc:
                 logger.exception("Cloudinary upload failed")
-                raise HTTPException(status_code=500, detail="Image upload failed")
+                raise HTTPException(status_code=500, detail="Image upload failed") from exc
 
         db.add(user)
         await db.commit()
@@ -156,9 +143,9 @@ async def update_user_profile(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         logger.exception("Unexpected error while updating profile")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred") from exc
 
 
 
@@ -174,7 +161,7 @@ async def deactivate_account(
             raise HTTPException(status_code=400, detail="Account already deactivated")
 
         current_user.is_active = False
-        current_user.deactivated_at = datetime.utcnow()
+        current_user.deactivated_at = datetime.now(UTC)
 
         db.add(current_user)
         await db.commit()
@@ -182,9 +169,9 @@ async def deactivate_account(
         logger.info(f"🚫 Account deactivated for {current_user.email}")
         return {"message": "Account successfully deactivated. You can reactivate anytime by contacting support."}
 
-    except Exception as e:
+    except Exception as exc:
         logger.exception("Error deactivating account")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     
 
 
@@ -208,14 +195,23 @@ async def delete_account(
         logger.info(f" User {current_user.email} deleted successfully.")
         return {"message": "Your account and all data have been permanently deleted."}
 
-    except Exception as e:
+    except Exception as exc:
         logger.exception("Error deleting account")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 
 # List users with search and region filter
-@router.get("/", response_model=list[schemas.UserPublic])
+# `response_model_exclude_none=True` strips null fields from each
+# UserPublic in the response. Pure payload-size optimisation;
+# the frontend's existing consumers (Header.tsx, usePeople.ts)
+# read only the fields they need and treat absent and null
+# identically.
+@router.get(
+    "/",
+    response_model=list[schemas.UserPublic],
+    response_model_exclude_none=True,
+)
 async def list_users(
     db: AsyncSession = Depends(get_db),
     skip: int = 0,
@@ -245,8 +241,17 @@ async def list_users(
     users = result.scalars().all()
 
     verified_roles = {"mp", "Admin", "journalist"}
-    users_out = []
 
+    # Perf: one batched GROUP BY instead of one count query per user.
+    # Same JSON shape — `followers_count` is still int|0 per record.
+    follower_counts = await batched_counts(
+        db,
+        model=Follower,
+        fk_col=Follower.followed_id,
+        ids=[u.id for u in users],
+    )
+
+    users_out = []
     for user in users:
         #  Ensure interests is always a list
         interests = user.interests or []
@@ -254,10 +259,8 @@ async def list_users(
         #  Verified logic
         is_verified = bool(user.role and user.role.strip().lower() in verified_roles)
 
-        #  Followers count (safe async scalar query)
-        followers_count = await db.scalar(
-            select(func.count()).where(Follower.followed_id == user.id)
-        ) or 0
+        #  Followers count (now served from the batched dict)
+        followers_count = follower_counts.get(user.id, 0)
 
         #  Manual Pydantic-safe serialization (prevents MissingGreenlet)
         user_dict = {
@@ -422,9 +425,13 @@ async def get_mutual_interests(
             mutuals.append(f"{field.replace('_', ' ').title()}: {curr_val}")
 
     # Compare list-type interests if both users have them
-    if hasattr(current_user, "interests") and hasattr(target_user, "interests"):
-        if current_user.interests and target_user.interests:
-            shared = set(current_user.interests) & set(target_user.interests)
-            mutuals.extend([f"Interest: {i}" for i in shared])
+    if (
+        hasattr(current_user, "interests")
+        and hasattr(target_user, "interests")
+        and current_user.interests
+        and target_user.interests
+    ):
+        shared = set(current_user.interests) & set(target_user.interests)
+        mutuals.extend([f"Interest: {i}" for i in shared])
 
     return mutuals

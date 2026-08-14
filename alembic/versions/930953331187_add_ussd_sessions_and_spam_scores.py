@@ -33,16 +33,11 @@ def upgrade() -> None:
     )
     op.create_index('idx_ussd_sessions_phone', 'ussd_sessions', ['phone_number'], unique=False)
 
-    # Add spam_scores column to messages
-    op.add_column('messages', sa.Column('spam_score', sa.Float(), nullable=True))
-    op.add_column('messages', sa.Column('is_spam', sa.Boolean(), nullable=True))
     pass
     # ### end Alembic commands ###
 
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('ussd_sessions')
-    op.drop_column('messages', 'is_spam')
-    op.drop_column('messages', 'spam_score')
     pass
     # ### end Alembic commands ###

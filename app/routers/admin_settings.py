@@ -1,20 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models import AdminSetting
-from app.schemas import (
-    AdminSettingOut,
-    AdminSettingUpdate
-)
-from app.routers.oauth2 import get_current_user
-from app.schemas import Role
+from app.schemas import AdminSettingOut, AdminSettingUpdate, Role
 
 router = APIRouter(prefix="/admin/settings", tags=["Admin Settings"])
 
 
 async def get_current_admin(current_user=Depends(get_current_user)):
-    if current_user.role != Role.ADMIN.value:
+    if current_user.role.value != Role.ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",

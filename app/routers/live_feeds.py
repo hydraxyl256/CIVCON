@@ -1,13 +1,20 @@
-from fastapi import Query
-from fastapi import APIRouter, Depends, HTTPException, status
+"""
+DEPRECATED — superseded by the case-management domain (`app.routers.cases`).
+This module is kept operational for the legacy frontend pages
+(`/discussion/:topicId`, `/live-discussion/:id`, the ModernChatBox DM
+widget). Removal is deferred until those pages are migrated. See
+`C:\\Users\\HP\\Desktop\\Citizen UI.txt` for the migration plan.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List, Optional
-from sqlalchemy import func
 from sqlalchemy.orm import selectinload
+
 from .. import models, schemas
-from ..schemas import Role  
 from ..database import get_db
+from ..schemas import Role
 from .permissions import require_role
 
 router = APIRouter(
@@ -15,7 +22,7 @@ router = APIRouter(
     tags=["Live Feeds"]
 )
 
-@router.get("/", response_model=List[schemas.LiveFeedResponse])
+@router.get("/", response_model=list[schemas.LiveFeedResponse])
 async def get_live_feeds(
     db: AsyncSession = Depends(get_db),
     limit: int = 20,
@@ -105,7 +112,6 @@ async def delete_live_feed(
     
     await db.delete(live_feed)
     await db.commit()
-    return None
 
 
 # Add this endpoint to the existing router (same file with other live-feed endpoints)

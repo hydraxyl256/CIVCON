@@ -1,16 +1,15 @@
+import logging
+import os
 import pickle
 import re
-import os
-from typing import Tuple
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-import logging
 from prometheus_client import Counter
-
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
 
 # Logging Setup
 logger = logging.getLogger("app.spam_detector")
@@ -80,7 +79,7 @@ class SpamDetector:
 
     def _load_or_train_models(self):
         """Load or train spam models for all languages."""
-        for lang in OFFENSIVE_WORDS.keys():
+        for lang in OFFENSIVE_WORDS:
             model_file = f"{self.model_path}_{lang}.pkl"
             try:
                 if os.path.exists(model_file):
@@ -174,7 +173,7 @@ class SpamDetector:
 
 
     #  Prediction
-    def predict_spam(self, text: str, lang: str = "en") -> Tuple[bool, float]:
+    def predict_spam(self, text: str, lang: str = "en") -> tuple[bool, float]:
         if not self.is_loaded or not self.pipelines.get(lang):
             logger.warning(f"No model for {lang}. Defaulting to not spam.")
             return False, 0.0

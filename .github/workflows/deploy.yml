@@ -1,0 +1,145 @@
+# ============================================================================
+# CIV-CON Backend — CD workflow
+# ============================================================================
+# Deploys the FastAPI backend to Render on push to main.
+#
+# Render exposes a "Deploy Hook" URL per service — a POST that triggers
+# a redeploy using the latest commit on the linked branch. This
+# workflow:
+#   1. Validates CI passed (required status check)
+#   2. POSTs the deploy hook (Render pulls, builds, runs release
+#      command = alembic upgrade head, then deploys)
+#   3. Polls /health until the new revision responds
+#
+# Secrets required (per environment):
+#   - RENDER_DEPLOY_HOOK_URL_STAGING
+#   - RENDER_DEPLOY_HOOK_URL_PRODUCTION
+#   - RENDER_API_KEY                (optional — for status checks)
+#   - BACKEND_HEALTH_URL_STAGING
+#   - BACKEND_HEALTH_URL_PRODUCTION
+# ============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: production
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false   # Never cancel a deploy halfway
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Production deploy (gated by environment approval)
+  # -----------------------------------------------------------------------
+  production:
+    name: Deploy to production
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://civcon-backend.onrender.com
+    steps:
+      - name: Verify CI passed
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              check_name: 'CI'
+            });
+            const allGreen = checks.check_runs.every(r =>
+              r.conclusion === 'success' || r.conclusion === 'neutral' || r.conclusion === 'skipped'
+            );
+            if (!allGreen) {
+              throw new Error('CI checks did not pass — aborting deploy');
+            }
+
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL_PRODUCTION }}
+        run: |
+          echo "POSTing Render deploy hook..."
+          curl --fail --silent --show-error --max-time 30 \
+            -X POST "$RENDER_DEPLOY_HOOK_URL"
+          echo "Render deploy triggered. Polling /health..."
+
+      # Render takes 1-3 minutes to deploy (pull, build, migrate, restart).
+      # Poll /health every 20 seconds for up to 5 minutes.
+      - name: Wait for healthy deploy
+        env:
+          BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL_PRODUCTION }}
+        run: |
+          for i in $(seq 1 15); do
+            echo "Attempt $i/15..."
+            HTTP_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+              --max-time 10 "$BACKEND_HEALTH_URL/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Backend healthy"
+              exit 0
+            fi
+            echo "  → HTTP $HTTP_CODE; retrying in 20s"
+            sleep 20
+          done
+          echo "❌ Backend did not become healthy within 5 minutes"
+          exit 1
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "🚨 *CIV-CON backend production deploy FAILED*\nCommit: ${{ github.sha }}\nAuthor: ${{ github.actor }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  # -----------------------------------------------------------------------
+  # Staging deploy (auto on push)
+  # -----------------------------------------------------------------------
+  staging:
+    name: Deploy to staging
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://civcon-backend-staging.onrender.com
+    steps:
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL_STAGING }}
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            -X POST "$RENDER_DEPLOY_HOOK_URL"
+
+      - name: Wait for healthy deploy
+        env:
+          BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL_STAGING }}
+        run: |
+          for i in $(seq 1 15); do
+            HTTP_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+              --max-time 10 "$BACKEND_HEALTH_URL/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Staging backend healthy"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "❌ Staging did not become healthy"
+          exit 1

@@ -1,0 +1,188 @@
+# ============================================================================
+# CIV-CON Backend — CI workflow
+# ============================================================================
+# Runs on every push and PR to main. Three jobs:
+#   1. lint      — ruff + mypy on backend code
+#   2. test      — pytest (with a real Postgres + Redis service)
+#   3. docker    — build the production image to surface Dockerfile bugs
+#
+# Concurrency cancels in-flight runs on the same branch so a fast
+# follow-up push doesn't waste runner minutes on a stale build.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  POETRY_VIRTUALENVS_CREATE: false   # Use the runner's environment
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Lint + type-check
+  # -----------------------------------------------------------------------
+  lint:
+    name: Lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/CIVCON/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend/CIVCON
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy
+
+      - name: ruff check
+        working-directory: backend/CIVCON
+        run: ruff check app/ alembic/
+
+      - name: ruff format check
+        working-directory: backend/CIVCON
+        run: ruff format --check app/ alembic/
+
+      # mypy is opt-in — uncomment when ready. Strictness settings
+      # live in pyproject.toml / mypy.ini.
+      # - name: mypy
+      #   working-directory: backend/CIVCON
+      #   run: mypy app/
+
+  # -----------------------------------------------------------------------
+  # Tests (pytest with Postgres + Redis services)
+  # -----------------------------------------------------------------------
+  test:
+    name: Tests (pytest)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: civcon_test
+          POSTGRES_PASSWORD: civcon_test
+          POSTGRES_DB: civcon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://civcon_test:civcon_test@localhost:5432/civcon_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-not-for-production
+      SESSION_SECRET_KEY: test-session-secret-not-for-production
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      ENVIRONMENT: test
+      LOG_FORMAT: text
+      LOG_LEVEL: WARNING
+      GOOGLE_CLIENT_ID: test
+      GOOGLE_CLIENT_SECRET: test
+      GOOGLE_REDIRECT_URI: http://localhost:8000/auth/google/callback
+      LINKEDIN_CLIENT_ID: test
+      LINKEDIN_CLIENT_SECRET: test
+      LINKEDIN_REDIRECT_URI: http://localhost:8000/auth/linkedin/callback
+      AFRICASTALKING_USERNAME: sandbox
+      AFRICASTALKING_API_KEY: test
+      MAIL_USERNAME: test
+      MAIL_PASSWORD: test
+      MAIL_FROM: test@example.com
+      CLOUDINARY_CLOUD_NAME: test
+      CLOUDINARY_API_KEY: test
+      CLOUDINARY_API_SECRET: test
+      RESEND_API_KEY: test
+      SENDER_EMAIL: test@example.com
+      FRONTEND_URL: http://localhost:5173
+      BACKEND_URL: http://localhost:8000
+      CIVCON_ALEMBIC_CONCURRENTLY: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/CIVCON/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend/CIVCON
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run migrations
+        working-directory: backend/CIVCON
+        env:
+          CIVCON_ALEMBIC_CONCURRENTLY: "0"
+        run: |
+          alembic upgrade head
+
+      - name: Run tests
+        working-directory: backend/CIVCON
+        run: |
+          pytest -v --tb=short --maxfail=10 \
+            --junitxml=test-results.xml \
+            tests/
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: backend/CIVCON/test-results.xml
+          retention-days: 14
+
+  # -----------------------------------------------------------------------
+  # Docker build (catches Dockerfile bugs in CI, not just at deploy time)
+  # -----------------------------------------------------------------------
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: backend/CIVCON
+          file: backend/CIVCON/Dockerfile
+          push: false
+          tags: civcon-backend:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

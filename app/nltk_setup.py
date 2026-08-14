@@ -1,6 +1,7 @@
 # app/nltk_setup.py
-import nltk
 import logging
+
+import nltk
 
 logger = logging.getLogger("app.nltk_setup")
 

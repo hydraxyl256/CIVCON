@@ -50,7 +50,7 @@ def upgrade() -> None:
     op.create_table('notifications',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
-    sa.Column('type', sa.Enum('COMMENT', 'VOTE', 'MESSAGE', 'GROUP', 'SYSTEM', name='notificationtype'), nullable=False),
+    sa.Column('type', sa.Enum('COMMENT', 'VOTE', 'GROUP', 'SYSTEM', name='notificationtype'), nullable=False),
     sa.Column('message', sa.String(), nullable=False),
     sa.Column('post_id', sa.Integer(), nullable=True),
     sa.Column('group_id', sa.Integer(), nullable=True),
@@ -98,9 +98,6 @@ def upgrade() -> None:
     op.create_index(op.f('ix_live_feeds_id'), 'live_feeds', ['id'], unique=False)
     op.create_index(op.f('ix_live_feeds_journalist_id'), 'live_feeds', ['journalist_id'], unique=False)
     op.create_index(op.f('ix_live_feeds_post_id'), 'live_feeds', ['post_id'], unique=False)
-    op.create_index(op.f('ix_messages_id'), 'messages', ['id'], unique=False)
-    op.create_index(op.f('ix_messages_recipient_id'), 'messages', ['recipient_id'], unique=False)
-    op.create_index(op.f('ix_messages_sender_id'), 'messages', ['sender_id'], unique=False)
     op.add_column('posts', sa.Column('group_id', sa.Integer(), nullable=True))
     op.create_index(op.f('ix_posts_author_id'), 'posts', ['author_id'], unique=False)
     op.create_index(op.f('ix_posts_group_id'), 'posts', ['group_id'], unique=False)
@@ -165,9 +162,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_posts_group_id'), table_name='posts')
     op.drop_index(op.f('ix_posts_author_id'), table_name='posts')
     op.drop_column('posts', 'group_id')
-    op.drop_index(op.f('ix_messages_sender_id'), table_name='messages')
-    op.drop_index(op.f('ix_messages_recipient_id'), table_name='messages')
-    op.drop_index(op.f('ix_messages_id'), table_name='messages')
     op.drop_index(op.f('ix_live_feeds_post_id'), table_name='live_feeds')
     op.drop_index(op.f('ix_live_feeds_journalist_id'), table_name='live_feeds')
     op.drop_index(op.f('ix_live_feeds_id'), table_name='live_feeds')

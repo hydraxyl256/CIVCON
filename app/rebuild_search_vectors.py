@@ -1,6 +1,8 @@
-from app.database import AsyncSessionLocal as async_session_maker
-from sqlalchemy import text
 import asyncio
+
+from sqlalchemy import text
+
+from app.database import AsyncSessionLocal as async_session_maker
 
 
 async def rebuild_vectors():

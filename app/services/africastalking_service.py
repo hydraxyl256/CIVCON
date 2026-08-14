@@ -8,15 +8,14 @@ Usage:
     from app.services.africastalking_service import send_sms
 """
 
-import ssl
 import logging
+import ssl
+
 import africastalking
-from requests.adapters import HTTPAdapter
-from urllib3 import PoolManager
 import requests
+from requests.adapters import HTTPAdapter
+
 from app.config import settings
-
-
 
 # Logging setup
 logger = logging.getLogger("africastalking")

@@ -1,11 +1,12 @@
 import asyncio
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.future import select
-from app.models import User
-from app.config import settings
 
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.future import select
+from sqlalchemy.orm import sessionmaker
+
+from app.config import settings
+from app.models import User
 
 #  Load DATABASE_URL safely (from settings or .env)
 DATABASE_URL = getattr(settings, "database_url", None) or os.getenv("DATABASE_URL")

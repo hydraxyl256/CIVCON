@@ -1,20 +1,21 @@
+from datetime import UTC, datetime
+
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     HTTPException,
     Query,
-    BackgroundTasks,
 )
+from sqlalchemy import Float, case, cast, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, or_, desc, case, cast, Float
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
-from datetime import datetime, timedelta
-from .. import models, schemas
-from app.database import get_db
-from app.websockets.topics import broadcast_new_topic  
 
+from app.database import get_db
+from app.websockets.topics import broadcast_new_topic
+
+from .. import models, schemas
 
 router = APIRouter(
     prefix="/topics",
@@ -68,14 +69,14 @@ async def create_topic(
 
 
 #  GET TOPICS (With Filters + Search)
-@router.get("/", response_model=List[schemas.TopicOut])
+@router.get("/", response_model=list[schemas.TopicOut])
 async def get_topics(
     db: AsyncSession = Depends(get_db),
     skip: int = 0,
     limit: int = 9,
-    category: Optional[str] = Query(None, description="Filter by category"),
-    search: Optional[str] = Query(None, description="Search in title/description"),
-    sort: Optional[str] = Query("new", description="Sort by 'new' or 'trending'"),
+    category: str | None = Query(None, description="Filter by category"),
+    search: str | None = Query(None, description="Search in title/description"),
+    sort: str | None = Query("new", description="Sort by 'new' or 'trending'"),
 ):
     """Fetch topics with pagination, filters, and optional sorting."""
 
@@ -95,7 +96,7 @@ async def get_topics(
 
     # Trending sort = posts + recency
     if sort == "trending":
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         hours_ago_expr = cast(
             func.extract("epoch", now - models.Topic.created_at) / 3600, Float
         )
@@ -125,13 +126,13 @@ async def get_topics(
 
 
 #  GET TRENDING TOPICS (Dedicated)
-@router.get("/trending", response_model=List[schemas.TopicOut])
+@router.get("/trending", response_model=list[schemas.TopicOut])
 async def get_trending_topics(
     db: AsyncSession = Depends(get_db),
     limit: int = 6,
 ):
     """Return the top trending topics, calculated by posts + recency."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     hours_ago_expr = cast(
         func.extract("epoch", now - models.Topic.created_at) / 3600, Float
     )

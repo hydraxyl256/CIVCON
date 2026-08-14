@@ -1,31 +1,34 @@
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     HTTPException,
-    BackgroundTasks,
-    Query,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any, Dict
-from datetime import datetime
-from sqlalchemy import func
 
+from app.core.realtime import get_connection_manager
+from app.core.realtime import wrap as ws_wrap
 from app.database import get_db
-from app.models import User, Message, Notification
-from app.routers.oauth2 import get_current_user
+from app.models import Notification, User
+from app.routers.permissions import require_admin
 from app.utils.email_utils import send_email_background
-from app.core.manager import manager  
 
-router = APIRouter(prefix="", tags=["Admin Communication"])
+router = APIRouter(
+    prefix="/admin-communication",
+    tags=["Admin Communication"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 # ======================================================
 # 🔒 Require admin or superadmin
 # ======================================================
-async def admin_required(current_user: User = Depends(get_current_user)):
-    if current_user.role not in ["admin", "superadmin"]:
-        raise HTTPException(status_code=403, detail="Admins only.")
+async def admin_required(current_user: User = Depends(require_admin)):
     return current_user
 
 
@@ -57,7 +60,7 @@ async def list_users(
 # ======================================================
 @router.post("/emails")
 async def send_bulk_email(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_required),
@@ -103,7 +106,7 @@ async def send_bulk_email(
 # ======================================================
 @router.post("/notifications")
 async def send_notification(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_required),
 ):
@@ -132,118 +135,31 @@ async def send_notification(
         raise HTTPException(404, detail="No recipients found.")
 
     for u in users:
+        ts = datetime.now(UTC)
         note = Notification(
             user_id=u.id,
             message=f"{title}: {message}",
-            created_at=datetime.utcnow(),
+            created_at=ts,
         )
         db.add(note)
 
-        # Real-time push via WebSocket
-        await manager.send_personal_message(
-            {
-                "type": "notification",
-                "title": title,
-                "message": message,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            u.id,
-        )
+    # Perf: real-time WebSocket pushes are independent coroutines —
+    # fan them out concurrently. Behaviour unchanged (each push still
+    # goes through manager.send_message with the same per-user
+    # timestamp as before), just much faster for large recipient
+    # lists. The new manager exposes `send_message(user_id, payload)`
+    # (and keeps `send_personal_message` as a backwards-compat alias
+    # for legacy callers).
+    manager = get_connection_manager()
+    payload = ws_wrap({
+        "type": "notification",
+        "title": title,
+        "message": message,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }, type="notification")
+    await asyncio.gather(
+        *(manager.send_message(u.id, payload) for u in users)
+    )
 
     await db.commit()
     return {"message": f"Notification sent to {len(users)} user(s)."}
-
-
-# ======================================================
-# 💬 GET /chats
-# ======================================================
-@router.get("/chats")
-async def get_chat_messages(
-    userId: int = Query(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(admin_required),
-):
-    stmt = (
-        select(Message)
-        .where(
-            (Message.sender_id == current_user.id) & (Message.recipient_id == userId)
-            | (Message.sender_id == userId) & (Message.recipient_id == current_user.id)
-        )
-        .order_by(Message.created_at)
-    )
-    result = await db.execute(stmt)
-    messages = result.scalars().all()
-
-    return [
-        {
-            "id": m.id,
-            "from": "admin" if m.sender_id == current_user.id else "user",
-            "text": m.content,
-            "timestamp": m.created_at.isoformat(),
-        }
-        for m in messages
-    ]
-
-
-# ======================================================
-# ✉️ POST /chats
-# ======================================================
-@router.post("/chats")
-async def send_chat_message(
-    data: Dict[str, Any],
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(admin_required),
-):
-    to_user_id = data.get("toUserId")
-    content = data.get("message")
-
-    if not to_user_id or not content:
-        raise HTTPException(400, detail="Recipient ID and message content are required.")
-
-    # Verify recipient
-    result = await db.execute(select(User).where(User.id == to_user_id))
-    recipient = result.scalar_one_or_none()
-    if not recipient:
-        raise HTTPException(404, detail="Recipient not found.")
-
-    # Create message record
-    msg = Message(
-        sender_id=current_user.id,
-        recipient_id=recipient.id,
-        content=content,
-        created_at=datetime.utcnow(),
-        mp_id=1,  # or your admin MP reference
-    )
-    db.add(msg)
-    await db.commit()
-    await db.refresh(msg)
-
-    # Real-time WebSocket push
-    await manager.send_personal_message(
-        {
-            "type": "chat_message",
-            "from": "admin",
-            "text": msg.content,
-            "timestamp": msg.created_at.isoformat(),
-        },
-        recipient.id,
-    )
-
-    # Optional in-app notification
-    note = Notification(
-        user_id=recipient.id,
-        message=f"📩 New message from admin: {content[:80]}",
-        created_at=datetime.utcnow(),
-    )
-    db.add(note)
-    await db.commit()
-
-    return {
-        "message": "Message sent successfully.",
-        "data": {
-            "id": msg.id,
-            "from": "admin",
-            "text": msg.content,
-            "timestamp": msg.created_at,
-        },
-    }

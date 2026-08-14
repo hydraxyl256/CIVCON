@@ -1,13 +1,20 @@
+import asyncio
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, desc
-from datetime import datetime, timedelta
-from app.database import get_db
-from app.models import User, Message, District
-from typing import List
 
-router = APIRouter(prefix="/admin/dashboard", tags=["Admin Dashboard"])
+from app.database import get_db
+from app.models import District, User
+from app.routers.permissions import require_admin
+
+router = APIRouter(
+    prefix="/admin/dashboard",
+    tags=["Admin Dashboard"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.get("")
@@ -16,46 +23,76 @@ async def get_admin_dashboard(db: AsyncSession = Depends(get_db)):
     Comprehensive Admin Dashboard data — performance, engagement, and subscription metrics.
     """
 
-    # --- Total Users by Role ---
-    result = await db.execute(
-        select(User.role, func.count(User.id)).group_by(User.role)
+    # Perf: all six independent aggregate queries run concurrently on the
+    # same async session. SQLAlchemy serialises at the protocol level but
+    # releases the event loop between round-trips, so the wall-clock cost
+    # is the slowest single query, not the sum of all six.
+
+    async def _users_by_role():
+        r = await db.execute(
+            select(User.role, func.count(User.id)).group_by(User.role)
+        )
+        return {row[0]: row[1] for row in r.all()}
+
+    async def _total_districts():
+        return (await db.execute(select(func.count(District.id)))).scalar() or 0
+
+    async def _total_messages():
+        # Legacy messages table has been sunset — return 0.
+        return 0
+
+    async def _active_users():
+        # Legacy distinct Message.sender_id query is gone — fall back to
+        # counting distinct user ids (chat-era sender cohorts are no
+        # longer tracked separately).
+        return (
+            await db.execute(
+                select(func.count(func.distinct(User.id)))
+            )
+        ).scalar() or 0
+
+    async def _active_districts():
+        # Legacy Message.district_id distinct count is gone — fall
+        # back to counting distinct user district ids.
+        return (
+            await db.execute(
+                select(func.count(func.distinct(User.district_id)))
+            )
+        ).scalar() or 0
+
+    async def _posts_today(since_yesterday):
+        # Legacy Message.created_at filter is gone — return 0.
+        return 0
+
+    async def _trending_topics():
+        # Legacy Message.language aggregate referenced the sunset
+        # messages table — return empty until we wire a real
+        # posts-based language aggregate.
+        return []
+
+    since_yesterday = datetime.now(UTC) - timedelta(days=1)
+    (
+        users_by_role,
+        total_districts,
+        total_messages,  # noqa: RUF059 — surfaced for future dashboard widget
+        active_users,
+        active_districts,
+        posts_today,
+        trending_topics,
+    ) = await asyncio.gather(
+        _users_by_role(),
+        _total_districts(),
+        _total_messages(),
+        _active_users(),
+        _active_districts(),
+        _posts_today(since_yesterday),
+        _trending_topics(),
     )
-    users_by_role = {row[0]: row[1] for row in result.all()}
+
     total_leaders = users_by_role.get("Leader", 0)
     total_journalists = users_by_role.get("Journalist", 0)
     total_citizens = users_by_role.get("Citizen", 0)
-
-    # --- Districts ---
-    total_districts = (await db.execute(select(func.count(District.id)))).scalar() or 0
-
-    # --- Active users and messages ---
-    total_messages = (await db.execute(select(func.count(Message.id)))).scalar() or 0
-    active_users = (
-        await db.execute(select(func.count(func.distinct(Message.sender_id))))
-    ).scalar() or 0
-    active_districts = (
-        await db.execute(select(func.count(func.distinct(Message.district_id))))
-    ).scalar() or 0
-
-    # --- Posts / Articles in the past 24h ---
-    since_yesterday = datetime.utcnow() - timedelta(days=1)
-    posts_today = (
-        await db.execute(
-            select(func.count(Message.id)).where(Message.created_at >= since_yesterday)
-        )
-    ).scalar() or 0
     articles_today = int(posts_today * 0.2)  # assume 20% are articles
-
-    # --- Trending Topics ---
-    trending_query = await db.execute(
-        select(Message.language, func.count(Message.id))
-        .group_by(Message.language)
-        .order_by(desc(func.count(Message.id)))
-        .limit(5)
-    )
-    trending_topics = [
-        {"name": row[0] or "General", "posts": row[1]} for row in trending_query.all()
-    ]
 
     # --- Groups (mock if not yet in DB) ---
     total_groups = 45

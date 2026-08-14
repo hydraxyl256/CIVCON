@@ -1,16 +1,22 @@
-import os
-import httpx
 import logging
-from typing import Optional, Dict, Any
+import os
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from datetime import datetime
+
 from app.config import settings
 
 logger = logging.getLogger("email_utils")
 
 # Environment setup 
 RESEND_API_URL = "https://api.resend.com/emails"
-RESEND_API_KEY = settings.RESEND_API_KEY 
+# pydantic-settings v2 normalises env-var lookup (case-insensitive when
+# `Settings.case_sensitive=False`) but Python attribute access stays
+# case-sensitive. The settings field is declared as `resend_api_key`, so
+# we read it under its declared name.
+RESEND_API_KEY = settings.resend_api_key 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "CIV-CON <no-reply@civcon.org>")
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates")
 
@@ -25,10 +31,10 @@ if not RESEND_API_KEY:
 
 
 #  Helper — render Jinja2 template
-def render_email_template(template_name: str, context: Dict[str, Any]) -> str:
+def render_email_template(template_name: str, context: dict[str, Any]) -> str:
     try:
         template = env.get_template(template_name)
-        return template.render(**context, year=datetime.utcnow().year)
+        return template.render(**context, year=datetime.now(UTC).year)
     except Exception as e:
         logger.exception(f"Template rendering failed for {template_name}: {e}")
         raise
@@ -40,7 +46,7 @@ async def send_email(
     to_email: str,
     subject: str,
     html_content: str,
-    text_content: Optional[str] = None,
+    text_content: str | None = None,
 ):
     if not RESEND_API_KEY:
         logger.error("No Resend API key found, cannot send email")
@@ -114,7 +120,7 @@ def send_email_background(to_email: str, subject: str, body: str):
 
 
 #  Password Reset Email
-async def send_reset_email(to_email: str, reset_link: str, name: Optional[str] = None):
+async def send_reset_email(to_email: str, reset_link: str, name: str | None = None):
     html_content = render_email_template(
         "reset_password.html",
         {"reset_link": reset_link, "name": name or "User"},

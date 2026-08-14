@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+
 from .. import models, schemas
 from ..database import get_db
-from app.schemas import Vote, VoteResponse
-from ..services.notifications import create_and_send_notification
 from ..routers.users import get_current_user
+from ..services.notifications import create_and_send_notification
 
 router = APIRouter(
     prefix="/votes",
@@ -67,4 +66,3 @@ async def vote_post(
             )
 
         # Count likes
-        like_query = select(func.count()).select_from(models.Vote).where(models.Vote.post_id == vote)

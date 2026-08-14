@@ -1,0 +1,69 @@
+# ============================================================================
+# CIV-CON Backend — Docker build exclusions
+# ============================================================================
+# Tells Docker what NOT to copy into the build context. Smaller context
+# = faster builds and smaller image. Match the project convention:
+# ignore secrets, VCS noise, dev tooling, and large data dirs.
+# ============================================================================
+
+# ---- Secrets / config (NEVER bake into an image) ----
+.env
+.env.*
+!.env.example
+
+# ---- VCS / Git metadata ----
+.git
+.gitignore
+.gitattributes
+
+# ---- Python ----
+__pycache__
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Build / test / tooling ----
+tests/
+test_*.py
+*_test.py
+bench_reports/
+.benchmarks/
+
+# ---- Data / model artefacts (regenerated at runtime) ----
+nltk_data/
+*.pkl
+*.joblib
+
+# ---- User content (per-user; never commit and never ship in image) ----
+Uploads/
+media/
+static/uploads/
+
+# ---- IDE / OS noise ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ---- Local scripts / docs that don't belong in the runtime image ----
+README.md
+*.md
+*.txt
+!requirements.txt
+.claude/
+
+# ---- NLTK / spaCy downloads ----
+*.gz
+*.zip

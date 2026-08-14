@@ -1,0 +1,39 @@
+# Ruff configuration for the CIVCON backend.
+#
+# Notes on rules we deliberately disable:
+#
+# - B008  "function-call-in-default-argument". FastAPI requires the
+#        ``= Depends(get_db)`` pattern in every protected route. The
+#        flag is a false positive for the FastAPI idiom; the actual
+#        ``get_db`` runs once per request, not once at import.
+#
+# - G201  "logging-exc-info". We pass ``exc_info=...`` to
+#        ``logger.exception`` / ``logger.warning`` in many places. The
+#        rule fires when the exception is referenced inside an f-string;
+#        that is intentional for context-rich log lines.
+#
+# - TRY401, BLE001  We deliberately catch broad ``Exception`` in
+#        defensive layers (cache_headers, cookies, request lifecycle).
+#        Most sites already log or fall back; the rule produces noise.
+
+target-version = "py311"
+line-length = 100
+
+[lint]
+extend-select = ["I", "UP", "B"]
+ignore = [
+    "B008",   # FastAPI Depends() in defaults
+    "G201",   # .exception() with exc_info= pattern (see note)
+    "TRY401", # verbose log message; we use clear prose on purpose
+    "BLE001", # defensive broad-except layers (cache, cookies, request lifecycle)
+    "S110",   # try/except/pass — acceptable in telemetry fallbacks
+    "B019",   # cached property on async classes — used deliberately
+]
+
+[lint.per-file-ignores]
+# __init__.py often re-exports for ergonomic imports; unused-import is noise.
+"__init__.py" = ["F401"]
+# Alembic env / migrations use dynamic SQL via op.*; conventions differ.
+"alembic/**/*.py" = ["E", "F", "B", "UP"]
+# Tests may import private helpers or use broad excepts.
+"app/tests/**/*.py" = ["F401", "F811", "BLE001"]

@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, delete
+
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models import Follower, User
 from app.schemas import UserPublic
-from app.routers.oauth2 import get_current_user
-from typing import List
 
 router = APIRouter(prefix="/follow", tags=["Follow"])
 
@@ -70,7 +71,7 @@ async def unfollow_user(
 
 
 #  GET FOLLOWERS
-@router.get("/{user_id}/followers", response_model=List[UserPublic])
+@router.get("/{user_id}/followers", response_model=list[UserPublic])
 async def get_followers(user_id: int, db: AsyncSession = Depends(get_db)):
     """Get list of followers for a given user."""
     result = await db.execute(
@@ -83,7 +84,7 @@ async def get_followers(user_id: int, db: AsyncSession = Depends(get_db)):
 
 
 #  GET FOLLOWING
-@router.get("/{user_id}/following", response_model=List[UserPublic])
+@router.get("/{user_id}/following", response_model=list[UserPublic])
 async def get_following(user_id: int, db: AsyncSession = Depends(get_db)):
     """Get list of users that the given user is following."""
     result = await db.execute(
@@ -96,7 +97,7 @@ async def get_following(user_id: int, db: AsyncSession = Depends(get_db)):
 
 
 #  MUTUAL FOLLOWERS
-@router.get("/{user_id}/mutual-followers", response_model=List[UserPublic])
+@router.get("/{user_id}/mutual-followers", response_model=list[UserPublic])
 async def get_mutual_followers(
     user_id: int,
     db: AsyncSession = Depends(get_db),

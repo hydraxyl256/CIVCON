@@ -1,14 +1,16 @@
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, insert
 from sqlalchemy.orm import selectinload
-from typing import List
-from fastapi.responses import JSONResponse
+
+from app.db_helpers import batched_counts
+from app.dependencies.auth import get_current_user
+
 from .. import models, schemas
-from ..routers import oauth2
 from ..database import get_db
-from ..services.notifications import create_and_send_notification
 
 router = APIRouter(
     prefix="/groups",
@@ -29,7 +31,7 @@ async def get_db_user(db: AsyncSession, user_id: int):
 async def create_group(
     group: schemas.GroupCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: schemas.UserOut = Depends(oauth2.get_current_user),
+    current_user: schemas.UserOut = Depends(get_current_user),
 ):
     # Ensure unique group name
     result = await db.execute(select(models.Group).where(models.Group.name == group.name))
@@ -55,7 +57,7 @@ async def create_group(
     return {**db_group.__dict__, "member_count": len(db_group.members)}
 
 
-@router.get("/", response_model=List[schemas.GroupResponse])
+@router.get("/", response_model=list[schemas.GroupResponse])
 async def list_groups(db: AsyncSession = Depends(get_db)):
     query = select(models.Group).options(selectinload(models.Group.owner), selectinload(models.Group.members))
     result = await db.execute(query)
@@ -67,7 +69,7 @@ async def list_groups(db: AsyncSession = Depends(get_db)):
 async def join_group(
     group_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: schemas.UserOut = Depends(oauth2.get_current_user),
+    current_user: schemas.UserOut = Depends(get_current_user),
 ):
     group_query = select(models.Group).where(models.Group.id == group_id).options(selectinload(models.Group.members))
     group_result = await db.execute(group_query)
@@ -119,10 +121,21 @@ async def get_group_posts(
     posts_result = await db.execute(posts_query)
     posts = posts_result.scalars().all()
 
+    # Perf: batch the per-post like/comment counts into two GROUP BY
+    # queries instead of 2*N scalar queries. JSON shape unchanged —
+    # each entry still carries `like_count` and `comment_count` ints.
+    post_ids = [p.id for p in posts]
+    like_counts = await batched_counts(
+        db, model=models.Vote, fk_col=models.Vote.post_id, ids=post_ids,
+    )
+    comment_counts = await batched_counts(
+        db, model=models.Comment, fk_col=models.Comment.post_id, ids=post_ids,
+    )
+
     data = []
     for post in posts:
-        like_count = (await db.execute(select(func.count()).select_from(models.Vote).where(models.Vote.post_id == post.id))).scalar()
-        comment_count = (await db.execute(select(func.count()).select_from(models.Comment).where(models.Comment.post_id == post.id))).scalar()
+        like_count = like_counts.get(post.id, 0)
+        comment_count = comment_counts.get(post.id, 0)
         data.append({
             "post": post,
             "like_count": like_count,

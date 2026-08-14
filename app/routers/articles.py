@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import or_, func, desc, asc
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import asc, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
 
+from app.core.html_sanitizer import sanitize_article_html
 from app.database import get_db
 from app.models import Article
 from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
@@ -12,15 +13,15 @@ from app.schemas import ArticleCreate, ArticleOut, ArticleUpdate
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
 #  GET /articles (with search, category, tag filters)
-@router.get("/", response_model=List[ArticleOut])
+@router.get("/", response_model=list[ArticleOut])
 async def get_articles(
     db: AsyncSession = Depends(get_db),
     skip: int = 0,
     limit: int = 9,
-    category: Optional[str] = None,
-    tag: Optional[str] = None,
-    search: Optional[str] = None,
-    sort: Optional[str] = "latest",  # latest | oldest | relevance
+    category: str | None = None,
+    tag: str | None = None,
+    search: str | None = None,
+    sort: str | None = "latest",  # latest | oldest | relevance
 ):
     """
     Get paginated, searchable, sortable articles.
@@ -96,7 +97,16 @@ async def get_article(id: int, db: AsyncSession = Depends(get_db)):
 #  POST /articles
 @router.post("/", response_model=ArticleOut, status_code=status.HTTP_201_CREATED)
 async def create_article(article_data: ArticleCreate, db: AsyncSession = Depends(get_db)):
-    new_article = Article(**article_data.dict())
+    # SECURITY (F-001): sanitise the TipTap HTML on the way in. The
+    # frontend renders article content via `dangerouslySetInnerHTML`,
+    # so any <script>, on*= handler, or javascript: href that reaches
+    # the database will execute in every reader's browser. The
+    # sanitizer's allowlist matches the TipTap StarterKit + Link +
+    # Image schema, so legitimate editor output is preserved.
+    payload = article_data.dict()
+    if payload.get("content"):
+        payload["content"] = sanitize_article_html(payload["content"])
+    new_article = Article(**payload)
     db.add(new_article)
     await db.commit()
     await db.refresh(new_article)
@@ -123,7 +133,13 @@ async def update_article(
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    for key, value in article_data.dict(exclude_unset=True).items():
+    updates = article_data.dict(exclude_unset=True)
+    # SECURITY (F-001): re-sanitise content on every update too, in
+    # case an admin restored a pre-sanitizer copy from a backup.
+    if updates.get("content"):
+        updates["content"] = sanitize_article_html(updates["content"])
+
+    for key, value in updates.items():
         setattr(article, key, value)
 
     await db.commit()
@@ -148,4 +164,3 @@ async def delete_article(id: int, db: AsyncSession = Depends(get_db)):
 
     await db.delete(article)
     await db.commit()
-    return None

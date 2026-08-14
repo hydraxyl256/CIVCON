@@ -1,25 +1,26 @@
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import PlainTextResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy.exc import SQLAlchemyError
-from datetime import datetime
-from app.database import get_db
-from app.models import User, Message, MP
-from app.schemas import Role as RoleEnum
-from app.redis_client import get_redis
-from app.config import settings
-from app.spam_detector import SpamDetector
-import africastalking
 import asyncio
 import json
 import logging
 import re
-from app.utils.phone_utils import normalize_phone_number
+
+import africastalking
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from prometheus_client import Counter
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from app.config import settings
+from app.database import get_db
+from app.models import MP, User
+from app.redis_client import get_redis
+from app.schemas import Role as RoleEnum
+from app.spam_detector import SpamDetector
+from app.utils.phone_utils import normalize_phone_number
 
 # Router & logger
 router = APIRouter(prefix="/ussd", tags=["USSD"])
@@ -31,8 +32,9 @@ ussd_requests = Counter('ussd_requests_total', 'Total USSD requests')
 message_flagged = Counter('message_flagged_total', 'Total flagged messages')
 
 # Africa's Talking init (must be set in env)
+# Field names are lowercase on `Settings`; see app/routers/mp.py for context.
 try:
-    africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
+    africastalking.initialize(settings.africastalking_username, settings.africastalking_api_key)
     sms = africastalking.SMS
 except Exception:
     sms = None
@@ -162,8 +164,11 @@ async def send_sms_async(phone: str, message: str):
             raise RuntimeError("Africa's Talking SMS client not initialized")
         sms.send(message=message, recipients=[phone])
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: send_sms_sync(phone, message))
+        # Perf: Africa's Talking `sms.send` is a blocking SDK call.
+        # Use asyncio.to_thread (modern equivalent of
+        # loop.run_in_executor) so the event loop stays free while
+        # the HTTP round-trip to AT is in flight.
+        await asyncio.to_thread(send_sms_sync, phone, message)
         logger.info(f"SMS dispatched to {phone}")
     except Exception as e:
         logger.error(f"Failed to send SMS to {phone}: {e}", exc_info=True)
@@ -196,6 +201,14 @@ async def startup():
     await FastAPILimiter.init(redis)
     logger.info("FastAPILimiter initialized for USSD")
 
+# Perf: SpamDetector() reloads six pickled sklearn pipelines from
+# disk on every USSD request (a multi-hundred-ms cost that pins the
+# event loop while the disk reads run). The pipelines are immutable
+# — train once at module import and reuse the same instance. This
+# preserves detection results because the underlying models are
+# not mutated.
+spam_detector = SpamDetector()
+
 @router.post("/ussd_callback", dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -204,9 +217,8 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
         data = dict(data)
         logger.info(f"Incoming USSD request raw: {data}")
 
-        # prepare detector (instantiated per-request to avoid worker-global NLTK issues)
-        spam_detector = SpamDetector()
-
+        # The module-level `spam_detector` is reused below — no
+        # per-request instantiation.
         session_id = data.get("sessionId")
         phone_number = normalize_phone_number(data.get("phoneNumber"))
         text = (data.get("text") or "").strip()
@@ -381,49 +393,28 @@ async def ussd_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 is_offensive = False
 
             # Flag messages when necessary
+            # The chat-era `messages` table is gone — flagged inbound
+            # USSD messages are dropped at this layer. The citizen is
+            # still notified that their text was inappropriate, and a
+            # metric tick is emitted so abuse spikes stay observable.
             if (is_spam and spam_prob >= 0.8) or is_offensive:
                 message_flagged.inc()
-                try:
-                    msg = Message(
-                        sender_id=user.id,
-                        recipient_id=None,
-                        content=question,
-                        district_id=user.district_id,
-                        created_at=datetime.utcnow(),
-                        mp_id=None,
-                        is_flagged=True
-                    )
-                    db.add(msg)
-                    await db.commit()
-                except Exception as e:
-                    logger.error(f"Failed to save flagged message: {e}", exc_info=True)
-                    await db.rollback()
-                    await delete_session(session_id)
-                    return PlainTextResponse(content="END Something went wrong saving your message.")
                 await delete_session(session_id)
                 return PlainTextResponse(content="END Your message was flagged as inappropriate and will be reviewed.")
 
-            # Normal message flow: find MP, save message, send SMS
+            # Normal message flow: find MP, send SMS. The chat-era
+            # `messages` table is gone — the SMS push to the MP is the
+            # only transport remaining for USSD intake; citizens who
+            # want a tracked record should use the web/mobile case
+            # manager at /cases instead.
             try:
                 mps = await get_mps(db)
                 user_district = (user.district_id or "").lower().replace("district", "").strip()
                 mp = next((m for m in mps if user_district in (m.district_id or "").lower().replace("district", "").strip()), None)
                 recipient_id = mp.user_id if mp else settings.FALLBACK_MP_ID
                 recipient_phone = mp.phone_number if mp else settings.FALLBACK_PHONE
-
-                msg = Message(
-                    sender_id=user.id,
-                    recipient_id=recipient_id,
-                    content=question,
-                    district_id=user.district_id,
-                    created_at=datetime.utcnow(),
-                    mp_id=recipient_id,
-                    is_flagged=False
-                )
-                db.add(msg)
-                await db.commit()
             except Exception as e:
-                logger.error(f"Failed to save message: {e}", exc_info=True)
+                logger.error(f"Failed to resolve MP for SMS: {e}", exc_info=True)
                 await db.rollback()
                 await delete_session(session_id)
                 return PlainTextResponse(content="END Something went wrong saving your message.")

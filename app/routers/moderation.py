@@ -1,26 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, desc
-from typing import List, Dict, Any
+
 from app.database import get_db
-from app.models import Post, User, Comment, Vote, Notification
-from app.routers.oauth2 import get_current_user
-from app.schemas import UserPublic, PostResponse
-from datetime import datetime
+from app.db_helpers import batched_counts
+from app.dependencies.auth import get_current_user
+from app.models import Comment, Notification, Post, User, Vote
+from app.routers.permissions import require_admin
+from app.schemas import PostResponse
 
-router = APIRouter(prefix="/admin/moderation", tags=["Admin Moderation"])
+router = APIRouter(
+    prefix="/admin/moderation",
+    tags=["Admin Moderation"],
+    dependencies=[Depends(require_admin)],
+)
 
 
-
-#  Only admins or superadmins can access moderation
-async def admin_required(current_user: User = Depends(get_current_user)):
-    if current_user.role not in ["admin", "superadmin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to access moderation tools.",
-        )
-    return current_user
+#  Backwards-compatible alias — endpoints that still depend on `admin_required`
+#  will continue to work and inherit the same require_admin check.
+admin_required = require_admin
 
 
 
@@ -30,7 +32,7 @@ async def admin_required(current_user: User = Depends(get_current_user)):
 async def get_all_posts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_required),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     stmt = (
         select(Post, User)
         .join(User, Post.author_id == User.id)
@@ -40,13 +42,19 @@ async def get_all_posts(
     records = result.all()
 
     posts = []
+    # Perf: batched like + comment counts via two GROUP BY queries
+    # instead of 2*N scalar queries. JSON shape unchanged.
+    post_ids = [post.id for post, _author in records]
+    like_counts = await batched_counts(
+        db, model=Vote, fk_col=Vote.post_id, ids=post_ids,
+    )
+    comment_counts = await batched_counts(
+        db, model=Comment, fk_col=Comment.post_id, ids=post_ids,
+    )
+
     for post, author in records:
-        like_count = await db.scalar(
-            select(func.count()).select_from(Vote).where(Vote.post_id == post.id)
-        )
-        comment_count = await db.scalar(
-            select(func.count()).select_from(Comment).where(Comment.post_id == post.id)
-        )
+        like_count = like_counts.get(post.id, 0)
+        comment_count = comment_counts.get(post.id, 0)
         reports = getattr(post, "report_count", 0) or 0
 
         posts.append(
@@ -84,14 +92,14 @@ async def approve_post(
 
     # Update post status
     post.status = "Approved"
-    post.updated_at = datetime.utcnow()
+    post.updated_at = datetime.now(UTC)
 
     # Create notification for author
     notification = Notification(
         user_id=post.author_id,
         message=f"✅ Your post '{post.content[:50]}...' has been approved by moderators.",
         post_id=post.id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(notification)
 
@@ -118,14 +126,14 @@ async def remove_post(
 
     # Update post status
     post.status = "Removed"
-    post.updated_at = datetime.utcnow()
+    post.updated_at = datetime.now(UTC)
 
     # Create notification for author
     notification = Notification(
         user_id=post.author_id,
         message=f" Your post '{post.content[:50]}...' was removed by moderators for review.",
         post_id=post.id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(notification)
 
@@ -153,7 +161,7 @@ async def get_trending_topics(
     # Keyword-based topic extraction
     keywords = ["education", "health", "climate", "election", "youth", "governance"]
 
-    topics: Dict[str, Dict[str, Any]] = {}
+    topics: dict[str, dict[str, Any]] = {}
     for keyword in keywords:
         related_posts = [p for p in posts if keyword.lower() in p.lower()]
         topics[keyword.capitalize()] = {
@@ -176,7 +184,7 @@ async def suspend_post(
     current_user: User = Depends(get_current_user)
 ):
     # Ensure admin only
-    if current_user.role != "admin":
+    if current_user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
     result = await db.execute(select(Post).where(Post.id == post_id))
@@ -189,7 +197,7 @@ async def suspend_post(
         raise HTTPException(status_code=400, detail="Post already suspended")
 
     post.status = "Suspended"
-    post.updated_at = datetime.utcnow()
+    post.updated_at = datetime.now(UTC)
 
     db.add(post)
     await db.commit()

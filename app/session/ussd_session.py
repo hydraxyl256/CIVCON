@@ -1,7 +1,9 @@
-from sqlalchemy.ext.asyncio import AsyncSession
+
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import UssdSession
-from datetime import datetime
+
 
 async def get_session(db: AsyncSession, session_id: str, phone_number: str):
     """Fetch a session if it exists."""

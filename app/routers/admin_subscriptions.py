@@ -1,14 +1,20 @@
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, update
-from datetime import datetime, timedelta
-from app.database import get_db
-from app.models import Subscription, UserType, User
-from app.schemas import UserTypeCreate, UserTypeUpdate
-from typing import Optional
 
-router = APIRouter(prefix="/admin/subscriptions", tags=["Admin Subscriptions"])
+from app.database import get_db
+from app.models import Subscription, User, UserType
+from app.routers.permissions import require_admin
+from app.schemas import UserTypeCreate, UserTypeUpdate
+
+router = APIRouter(
+    prefix="/admin/subscriptions",
+    tags=["Admin Subscriptions"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 
@@ -130,8 +136,8 @@ async def create_subscription(
         user_id=user_id,
         plan=plan,
         status="active",
-        start_date=datetime.utcnow(),
-        end_date=datetime.utcnow() + timedelta(days=30),
+        start_date=datetime.now(UTC),
+        end_date=datetime.now(UTC) + timedelta(days=30),
         amount=amount,
         payment_method=payment_method,
     )
@@ -144,10 +150,10 @@ async def create_subscription(
 @router.put("/edit/{subscription_id}")
 async def edit_subscription(
     subscription_id: int,
-    plan: Optional[str] = None,
-    status: Optional[str] = None,
-    end_date: Optional[str] = None,
-    amount: Optional[float] = None,
+    plan: str | None = None,
+    status: str | None = None,
+    end_date: str | None = None,
+    amount: float | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Edit subscription details (plan, status, amount, etc.)."""
@@ -179,7 +185,7 @@ async def renew_subscription(subscription_id: int, db: AsyncSession = Depends(ge
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    sub.end_date = (sub.end_date or datetime.utcnow()) + timedelta(days=30)
+    sub.end_date = (sub.end_date or datetime.now(UTC)) + timedelta(days=30)
     sub.status = "active"
 
     await db.commit()
@@ -195,7 +201,7 @@ async def bulk_renew_expired(db: AsyncSession = Depends(get_db)):
     count = 0
     for sub in subs:
         sub.status = "active"
-        sub.end_date = (sub.end_date or datetime.utcnow()) + timedelta(days=30)
+        sub.end_date = (sub.end_date or datetime.now(UTC)) + timedelta(days=30)
         count += 1
 
     await db.commit()
@@ -211,7 +217,7 @@ async def cancel_subscription(subscription_id: int, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="Subscription not found")
 
     sub.status = "expired"
-    sub.end_date = datetime.utcnow()
+    sub.end_date = datetime.now(UTC)
 
     await db.commit()
     await db.refresh(sub)

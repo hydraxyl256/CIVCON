@@ -1,27 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, or_
-from typing import List, Optional
-from app.database import get_db
-from app.models import Event, EventAttendee, User
-from app.schemas import EventCreate, EventPublic, AttendeePublic
-from app.routers.oauth2 import get_current_user
-from app.utils.notifications import notify_user  
+from sqlalchemy.orm import selectinload
 
+from app.database import get_db
+from app.dependencies.auth import get_current_user
+from app.models import Event, EventAttendee, User
+from app.schemas import AttendeePublic, EventCreate, EventPublic
+from app.utils.notifications import notify_user
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 
 # --- Helper: build filters for list endpoint
 def _build_event_filters(
-    upcoming: Optional[bool],
-    date_from: Optional[str],
-    date_to: Optional[str],
-    category: Optional[str],
-    location: Optional[str],
-    search: Optional[str],
-    organizer_id: Optional[int],
+    upcoming: bool | None,
+    date_from: str | None,
+    date_to: str | None,
+    category: str | None,
+    location: str | None,
+    search: str | None,
+    organizer_id: int | None,
 ):
     filters = []
     if upcoming is True:
@@ -50,19 +51,19 @@ def _build_event_filters(
 
 
 # GET /events/  - list with filters, pagination, sort
-@router.get("/", response_model=List[EventPublic])
+@router.get("/", response_model=list[EventPublic])
 async def list_events(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
-    upcoming: Optional[bool] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    location: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    organizer_id: Optional[int] = Query(None),
-    sort: Optional[str] = Query("date_desc", regex="^(date_desc|date_asc|popular)$"),
+    upcoming: bool | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    category: str | None = Query(None),
+    location: str | None = Query(None),
+    search: str | None = Query(None),
+    organizer_id: int | None = Query(None),
+    sort: str | None = Query("date_desc", regex="^(date_desc|date_asc|popular)$"),
 ):
     """
     List events with pagination and filters.
@@ -90,22 +91,25 @@ async def list_events(
         stmt = stmt.order_by(Event.date.desc(), Event.created_at.desc())
 
     stmt = stmt.offset(skip).limit(limit)
+    # Perf: EventPublic serializes `organizer` which is a lazy-loaded
+    # relationship. Eager-load it so we don't fire one query per row
+    # during response serialization.
+    stmt = stmt.options(selectinload(Event.organizer))
     result = await db.execute(stmt)
     events = result.scalars().all()
 
     # fetch attendees_count efficiently in batch
+    counts: dict[int, int] = {}
     if events:
         event_ids = [e.id for e in events]
         counts_q = await db.execute(
             select(EventAttendee.event_id, func.count(EventAttendee.id)).where(EventAttendee.event_id.in_(event_ids)).group_by(EventAttendee.event_id)
         )
-        counts = {row[0]: row[1] for row in counts.all()}
-    else:
-        counts = {}
+        counts = {row[0]: row[1] for row in counts_q.all()}
 
     # attach attendees_count for response_model
     for e in events:
-        setattr(e, "attendees_count", counts.get(e.id, 0))
+        e.attendees_count = counts.get(e.id, 0)
 
     return events
 
@@ -136,7 +140,7 @@ async def create_event(
         await db.refresh(event)
 
         # ensure attendees_count attribute is present
-        setattr(event, "attendees_count", 0)
+        event.attendees_count = 0
         return event
     except Exception as exc:
         await db.rollback()
@@ -147,14 +151,21 @@ async def create_event(
 # GET /events/{event_id} - single event
 @router.get("/{event_id}", response_model=EventPublic)
 async def get_event(event_id: int, db: AsyncSession = Depends(get_db)):
-    stmt = select(Event).where(Event.id == event_id)
+    # Perf: eager-load organizer (single row, but EventPublic.organizer
+    # is serialized — without this every /events/{id} call triggers an
+    # implicit lazy load for the organizer).
+    stmt = (
+        select(Event)
+        .where(Event.id == event_id)
+        .options(selectinload(Event.organizer))
+    )
     result = await db.execute(stmt)
     event = result.scalar_one_or_none()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
     attendees_count = await db.scalar(select(func.count()).where(EventAttendee.event_id == event_id))
-    setattr(event, "attendees_count", attendees_count or 0)
+    event.attendees_count = attendees_count or 0
     return event
 
 
@@ -211,16 +222,16 @@ async def leave_event(event_id: int, db: AsyncSession = Depends(get_db), current
     try:
         await db.delete(attendee)
         await db.commit()
-    except Exception:
+    except Exception as exc:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to leave event")
+        raise HTTPException(status_code=500, detail="Failed to leave event") from exc
 
     return {"message": "Left event"}
 
 
 
 # GET /events/{event_id}/attendees - list attendees (paginated)
-@router.get("/{event_id}/attendees", response_model=List[AttendeePublic])
+@router.get("/{event_id}/attendees", response_model=list[AttendeePublic])
 async def get_attendees(event_id: int, db: AsyncSession = Depends(get_db), skip: int = 0, limit: int = 50):
     # check exists
     evt = await db.execute(select(Event).where(Event.id == event_id))

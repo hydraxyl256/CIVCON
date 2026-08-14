@@ -1,6 +1,7 @@
-import asyncio
 import json
+
 import redis.asyncio as redis
+
 from .config import settings
 
 # Use environment/config URL

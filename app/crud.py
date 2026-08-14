@@ -1,13 +1,14 @@
-from fastapi import HTTPException, status
 import random
 import string
-from typing import Optional
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from app.models import User, Role, UssdSession
-from app.schemas import UserCreate
+
+from fastapi import HTTPException, status
 from passlib.context import CryptContext
 from passlib.hash import bcrypt
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from app.models import Role, User
+from app.schemas import UserCreate
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -24,7 +25,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 #  ROLE DERIVATION 
 
-def derive_role(community_role: Optional[str]) -> Role:
+def derive_role(community_role: str | None) -> Role:
     if community_role:
         cr_lower = community_role.lower()
         if "official" in cr_lower:
@@ -40,24 +41,32 @@ async def generate_unique_username(first_name: str, last_name: str, db: AsyncSes
     Generate a unique username from first+last name.
     Adds random digits if a duplicate exists.
     Example: eronlaban, eronlaban_482, etc.
+
+    Bounded retry: the ``users.username`` UNIQUE index already guarantees
+    correctness at insert time. This loop is a TOCTOU band-aid, not a real
+    guarantee, so we cap it to avoid degenerate popular-name infinite loops.
     """
     base_username = f"{first_name.lower()}{last_name.lower()}".replace(" ", "")
     username = base_username
 
-    # Check for duplicates and retry with random suffix
-    while True:
+    # Bounded retry: 8 attempts (8^3 = 512k candidates at 3-digit suffix).
+    for _ in range(8):
         result = await db.execute(select(User).where(User.username == username))
         existing_user = result.scalar_one_or_none()
         if not existing_user:
-            break  # unique username found
+            return username  # unique username found
         suffix = ''.join(random.choices(string.digits, k=3))
         username = f"{base_username}_{suffix}"
 
+    # Fall through after 8 attempts — return the last attempt and let the
+    # UNIQUE index reject if there really is still a collision. This
+    # preserves existing behaviour (raise on insert failure) without an
+    # unbounded loop.
     return username
 
 
 #  CREATE USER 
-async def create_user(db: AsyncSession, user: "UserCreate", profile_image_path: str = None):
+async def create_user(db: AsyncSession, user: "UserCreate", profile_image_path: str | None = None):
     hashed_password = bcrypt.hash(user.password)
 
     # Validate interests field
@@ -94,8 +103,8 @@ async def create_user(db: AsyncSession, user: "UserCreate", profile_image_path: 
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating user: {str(e)}",
-        )
+            detail=f"Error creating user: {e!s}",
+        ) from e
 
     return db_user
 
@@ -106,39 +115,11 @@ async def get_user_by_email(db: AsyncSession, email: str):
     return result.scalars().first()
 
 
-async def get_user_by_google_id(db: AsyncSession, google_id: str) -> Optional[User]:
+async def get_user_by_google_id(db: AsyncSession, google_id: str) -> User | None:
     result = await db.execute(select(User).filter_by(google_id=google_id))
     return result.scalars().first()
 
 
-async def get_user_by_linkedin_id(db: AsyncSession, linkedin_id: str) -> Optional[User]:
+async def get_user_by_linkedin_id(db: AsyncSession, linkedin_id: str) -> User | None:
     result = await db.execute(select(User).filter_by(linkedin_id=linkedin_id))
     return result.scalars().first()
-
-
-
-
-async def get_mps_by_district(db: AsyncSession, district_id: str) -> list[User]:
-    return db.query(User).filter(User.role == Role.MP, User.district_id == district_id).all()
-
-async def get_ussd_session(db: AsyncSession, phone_number: str, session_id: str) -> Optional[dict]:
-    # Implement session query from ussd_sessions table
-    session = db.query(UssdSession).filter(UssdSession.phone_number == phone_number, UssdSession.session_id == session_id).first()
-    if session:
-        return {"step": session.current_step, "data": session.user_data}
-    return None
-
-async def save_ussd_session(db: AsyncSession, phone_number: str, session_id: str, step: str, data: dict):
-    session = db.query(UssdSession).filter(UssdSession.phone_number == phone_number, UssdSession.session_id == session_id).first()
-    if session:
-        session.current_step = step
-        session.user_data = data
-    else:
-        session = UssdSession(
-            phone_number=phone_number,
-            session_id=session_id,
-            current_step=step,
-            user_data=data
-        )
-        db.add(session)
-    db.commit()

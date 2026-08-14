@@ -1,0 +1,289 @@
+# ============================================================================
+# CIV-CON Backend — Render infrastructure-as-code
+# ============================================================================
+# Render Blueprint (render.yaml) provisions the entire backend stack
+# in one apply:
+#
+#   - civcon-backend  : FastAPI web service (Docker runtime)
+#   - civcon-db       : managed PostgreSQL 16
+#   - civcon-redis    : managed Key-Value store (Redis 7)
+#
+# The frontend ships to Vercel — see frontend/CIV-CON-main/vercel.json.
+#
+# How to apply this file:
+#   1. Render dashboard → "New" → "Blueprint" → point at this repo
+#      and select `backend/CIVCON/render.yaml` as the Blueprint path.
+#   2. Render creates the resources AND opens a PR-equivalent
+#      "infrastructure change" view so you can review before apply.
+#   3. After apply, manually set the secret env vars (SECRET_KEY,
+#      Cloudinary, OAuth, etc.) — see DEPLOYMENT.md §Secrets.
+#
+# Render Blueprint reference:
+#   https://docs.render.com/infrastructure-as-code
+# ============================================================================
+
+services:
+  # -----------------------------------------------------------------------
+  # FastAPI backend (Docker)
+  # -----------------------------------------------------------------------
+  - type: web
+    name: civcon-backend
+    runtime: docker
+    rootDir: backend/CIVCON
+    dockerfilePath: ./Dockerfile
+    dockerContext: backend/CIVCON
+
+    # Region pinned to Frankfurt to keep latency low for EU users
+    # (and Render's EU region has fewer capacity issues than US-East
+    # for new accounts). Change to `oregon` if your primary audience
+    # is North America.
+    region: frankfurt
+
+    plan: starter   # 512 MB / 0.5 CPU — bump to `standard` or higher for prod
+
+    branch: main
+    autoDeploy: true    # Redeploy on every push to main. Disable for prod once stable.
+
+    # Health-check path. Render pings this every few seconds; a 503
+    # here puts the service in "degraded" but doesn't redeploy.
+    healthCheckPath: /health
+
+    # Run database migrations as part of the release. alembic reads
+    # the same DATABASE_URL the app does, so this Just Works.
+    # `alembic upgrade head` is idempotent — no-op when already at head.
+    #
+    # We export CIVCON_ALEMBIC_CONCURRENTLY=1 because the perf-index
+    # migration uses CREATE INDEX CONCURRENTLY (see env.py); without
+    # this, CONCURRENTLY in a transaction is a no-op + warning.
+    releaseCommand: >
+      bash -lc '
+        set -euo pipefail;
+        echo "==> Running Alembic migrations (CIVCON_ALEMBIC_CONCURRENTLY=1)";
+        CIVCON_ALEMBIC_CONCURRENTLY=1 alembic upgrade head;
+        echo "==> Migrations complete";
+      '
+
+    # Build-time args (Buildpacks-style; passed as ARGs to the
+    # Dockerfile). Empty for backend — env vars are runtime-only.
+    buildCommand: ""
+
+    # Environment variables. `secret: false` = visible in the Render
+    # dashboard. `secret: true` = write-only (the value is set in the
+    # dashboard, never logged or echoed).
+    #
+    # Each var below is mapped 1:1 with backend/CIVCON/.env.example.
+    # `generateValue: true` means Render generates a random string on
+    # first apply — used for SECRET_KEY and SESSION_SECRET_KEY.
+    envVars:
+      # ---- Runtime environment ----
+      - key: ENVIRONMENT
+        value: production
+      - key: APP_VERSION
+        value: 1.0.0
+      - key: RENDER
+        value: "true"
+
+      # ---- API runtime ----
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_REQUEST_BODY_BYTES
+        value: "10485760"
+      - key: LOG_FORMAT
+        value: json        # JSON logs so Render's log search works
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SLOW_REQUEST_THRESHOLD_MS
+        value: "1000"
+      - key: METRICS_ENABLED
+        value: "true"
+
+      # ---- Database connection pool ----
+      # Tuned for Render starter (512 MB). pool_size + max_overflow
+      # should stay under Postgres' max_connections (default 100 for
+      # Render managed Postgres). Two workers × (10 + 20) = 60.
+      - key: DB_POOL_SIZE
+        value: "10"
+      - key: DB_MAX_OVERFLOW
+        value: "20"
+      - key: DB_POOL_RECYCLE
+        value: "1800"
+      - key: DB_POOL_TIMEOUT
+        value: "30"
+
+      # ---- Database (from managed Postgres) ----
+      # fromService + fromDatabase link these to the Postgres below.
+      # Render injects DATABASE_URL automatically; the discrete
+      # DATABASE_* fields are also populated from the same source.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: civcon-db
+          property: connectionString
+      - key: DATABASE_HOSTNAME
+        fromDatabase:
+          name: civcon-db
+          property: host
+      - key: DATABASE_PORT
+        fromDatabase:
+          name: civcon-db
+          property: port
+      - key: DATABASE_NAME
+        fromDatabase:
+          name: civcon-db
+          property: database
+      - key: DATABASE_USERNAME
+        fromDatabase:
+          name: civcon-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: civcon-db
+          property: password
+
+      # ---- Redis (from managed Key-Value store) ----
+      - key: REDIS_URL
+        fromService:
+          name: civcon-redis
+          type: redis
+          property: connectionString
+
+      # ---- Security / JWT (generated on first apply) ----
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SESSION_SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+
+      # ---- OAuth (set in dashboard after first deploy) ----
+      - key: GOOGLE_CLIENT_ID
+        sync: false       # Render waits for manual input
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://civcon-backend.onrender.com/auth/google/callback
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: LINKEDIN_REDIRECT_URI
+        value: https://civcon-backend.onrender.com/auth/linkedin/callback
+
+      # ---- Africa's Talking ----
+      - key: AFRICASTALKING_USERNAME
+        sync: false
+      - key: AFRICASTALKING_API_KEY
+        sync: false
+      - key: LIVE_USERNAME
+        value: sandbox
+      - key: LIVE_API_KEY
+        sync: false
+      - key: DEFAULT_CIVIC_OFFICE_NUMBER
+        value: "+256700000000"
+
+      # ---- Email (FastMail SMTP) ----
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_SERVER
+        value: smtp.fastmail.com
+      - key: MAIL_PORT
+        value: "587"
+      - key: MAIL_TLS
+        value: "True"
+      - key: MAIL_SSL
+        value: "False"
+
+      # ---- Cloudinary ----
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # ---- Resend ----
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SENDER_EMAIL
+        sync: false
+
+      # ---- URLs ----
+      # Update after first deploy once the real Render hostname is known.
+      - key: FRONTEND_URL
+        value: https://civ-con-sh2j.vercel.app
+      - key: BACKEND_URL
+        value: https://civcon-backend.onrender.com
+
+      # ---- Fallbacks ----
+      - key: FALLBACK_PHONE
+        value: "+256700000000"
+      - key: FALLBACK_MP_ID
+        value: "1"
+
+      # ---- Sentry (optional — set in dashboard to enable) ----
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"
+      - key: SENTRY_PROFILES_SAMPLE_RATE
+        value: "0.0"
+      - key: SENTRY_SEND_DEFAULT_PII
+        value: "false"
+
+  # -----------------------------------------------------------------------
+  # Managed PostgreSQL
+  # -----------------------------------------------------------------------
+  - type: pserv
+    name: civcon-db
+    region: frankfurt
+    plan: starter               # 256 MB / 1 GB disk — bump for prod traffic
+    postgresMajorVersion: "16"
+    # Daily backups retained 7 days. Set to 30 once stable.
+    # diskEncryption is on by default for managed Postgres.
+    ipAllowList: []             # Only allow connections from linked services
+
+    # Free add-ons:
+    #   - pg_stat_statements (already enabled by Render)
+    #   - connection pooling (PgBouncer) — enable in dashboard
+    #     for high-concurrency environments; CIVCON has its own pool
+    #     (db_pool_size + db_max_overflow) so PgBouncer is optional.
+
+  # -----------------------------------------------------------------------
+  # Managed Redis (Key-Value store)
+  # -----------------------------------------------------------------------
+  - type: redis
+    name: civcon-redis
+    region: frankfurt
+    plan: starter                # 256 MB
+    # Redis 7 — required by fastapi-limiter + token blacklist usage.
+    redisMajorVersion: "7"
+    # ipAllowList: [] — only allow connections from linked services.
+    ipAllowList: []
+
+# ============================================================================
+# Notes
+# ============================================================================
+# - sync: false env vars do NOT block deploys — Render starts the
+#   service with empty values and the app starts in a degraded state
+#   until you fill them in. For OAuth / Cloudinary / SMTP, this is
+#   fine: those features only activate when the secret is set.
+#
+# - generateValue: true runs once on first apply and persists the
+#   generated value across redeploys. To rotate, click "Generate" in
+#   the dashboard (or `render env-generate SECRET_KEY` from the CLI).
+#
+# - Release command failure blocks the deploy. A migration that fails
+#   keeps the previous code version live — Render rolls back
+#   automatically. See DEPLOYMENT.md §Rollback.
+#
+# - The autoDeploy flag redeploys on every push to main. For
+#   production, consider disabling autoDeploy and using Render's
+#   "Manual Deploy" workflow from a protected branch instead.
+# ============================================================================

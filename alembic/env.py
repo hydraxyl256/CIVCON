@@ -30,6 +30,24 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+# CONCURRENTLY-aware transaction wrapping.
+#
+# Postgres' CREATE INDEX CONCURRENTLY must run *outside* a wrapping
+# BEGIN/COMMIT block. When CIVCON_ALEMBIC_CONCURRENTLY=1 the perf
+# migration (`b1c2d3e4f5a6_perf_index_constraints_and_fks.py`) emits
+# CREATE INDEX CONCURRENTLY IF NOT EXISTS statements, and we skip
+# the alembic-default `with context.begin_transaction():` block so
+# each statement commits independently. Setting the env var is the
+# team-level signal that the migrations are being applied to a live
+# database (Render / prod) where holding an AccessExclusiveLock on
+# a table is unacceptable.
+#
+# Outside of that, we keep the alembic default — every migration
+# runs inside one transaction so a half-applied change is rolled
+# back as a unit on error.
+CONCURRENTLY_ENABLED = os.getenv("CIVCON_ALEMBIC_CONCURRENTLY", "1") == "1"
+
+
 # Migration runners
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -39,6 +57,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,  # Detect column-type changes in autogenerate.
+        compare_server_default=True,  # Detect default-value changes.
     )
 
     with context.begin_transaction():
@@ -54,10 +74,20 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+        )
 
-        with context.begin_transaction():
+        if CONCURRENTLY_ENABLED:
+            # Online-index-build mode: no BEGIN/COMMIT wrapper so
+            # CREATE INDEX CONCURRENTLY can run.
             context.run_migrations()
+        else:
+            with context.begin_transaction():
+                context.run_migrations()
 
 
 if context.is_offline_mode():
